@@ -56,6 +56,10 @@ st.markdown(
         overflow-y: auto;
         padding-bottom: 3rem;
       }
+      /* Keep the starter-course menu tall enough to show many choices at once. */
+      [role="listbox"] {
+        max-height: 72vh !important;
+      }
     </style>
     """,
     unsafe_allow_html=True,

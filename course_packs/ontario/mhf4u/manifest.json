@@ -26,6 +26,13 @@
       "estimated_minutes": 180,
       "topics": ["function characteristics", "transformations", "inverses", "composition"],
       "lesson_file": "units/function_foundations.json"
+    },
+    {
+      "id": "polynomial-rational-functions",
+      "title": "Polynomial and rational function behaviour",
+      "estimated_minutes": 150,
+      "topics": ["polynomial functions", "rational functions", "end behaviour", "asymptotes"],
+      "lesson_file": "units/polynomial_rational_functions.json"
     }
   ]
 }

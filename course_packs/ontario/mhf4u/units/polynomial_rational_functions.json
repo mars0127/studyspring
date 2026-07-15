@@ -1,0 +1,21 @@
+{
+  "title": "Polynomial and rational function behaviour",
+  "blocks": [
+    {"type": "heading", "content": "Polynomial and rational function behaviour"},
+    {"type": "learning_objective", "title": "Learning objectives", "content": "Predict polynomial end behaviour, connect factors to zeros, and describe rational-function restrictions and asymptotes."},
+    {"type": "paragraph", "title": "Why this matters", "content": "Graphs let you test whether an algebraic model makes sense before calculating every point. This is useful whenever a relationship has turning points, restrictions, or long-term behaviour."},
+    {"type": "definition", "title": "End behaviour", "content": "End behaviour describes what happens to f(x) as x becomes very large positive or negative. For a polynomial, its leading term controls this behaviour."},
+    {"type": "diagram_placeholder", "title": "Four leading-term patterns", "content": "Sketch the four cases: even degree positive, even degree negative, odd degree positive, and odd degree negative. Label both ends of each graph."},
+    {"type": "worked_example", "title": "Worked example 1: polynomial zeros", "content": "For f(x)=(x-2)(x+1)^2, the zeros are x=2 and x=-1. The graph crosses at x=2 and touches/turns at x=-1 because that factor has even multiplicity."},
+    {"type": "worked_example", "title": "Worked example 2: rational restrictions", "content": "For r(x)=(x+3)/(x-2), x=2 is excluded from the domain and creates a vertical asymptote. Because numerator and denominator have equal degree, y=1 is the horizontal asymptote."},
+    {"type": "common_mistake", "title": "A hole is not always an asymptote", "content": "If a common factor cancels, its excluded x-value creates a hole. A factor left in the denominator creates a vertical asymptote."},
+    {"type": "warning", "title": "Domain first", "content": "State restrictions before simplifying a rational expression. Cancelling a factor does not restore an excluded input."},
+    {"type": "practice_set", "title": "Quick check and practice", "content": "1. State the end behaviour of -2x^5+x.\n2. Find the zeros and multiplicities of (x-4)^2(x+2).\n3. State the domain restrictions and asymptotes of (x-1)/(x^2-9)."},
+    {"type": "answer_key", "title": "Solutions", "content": "1. Left end up, right end down.\n2. x=4 has multiplicity 2; x=-2 has multiplicity 1.\n3. x≠-3,3; vertical asymptotes x=-3 and x=3; horizontal asymptote y=0."},
+    {"type": "flashcard_set", "cards": [{"front": "What controls polynomial end behaviour?", "back": "The degree and leading coefficient."}, {"front": "What does an even multiplicity zero do?", "back": "The graph touches the x-axis and turns around."}, {"front": "What creates a vertical asymptote?", "back": "A denominator factor that remains after simplification."}]},
+    {"type": "multiple_choice_set", "questions": [{"topic": "Rational functions", "question": "Which input is excluded from f(x)=1/(x+5)?", "options": ["-5", "0", "5", "1"], "correct_answer": "-5", "explanation": "The denominator cannot equal zero."}, {"topic": "Polynomial functions", "question": "What happens at a zero with multiplicity 2?", "options": ["The graph touches and turns", "The graph always crosses", "The domain ends", "A horizontal asymptote appears"], "correct_answer": "The graph touches and turns", "explanation": "Even multiplicity causes a touch/turn behaviour."}]},
+    {"type": "short_answer_set", "questions": [{"topic": "Rational functions", "question": "Explain the difference between a hole and a vertical asymptote.", "sample_answer": "A strong answer explains that both come from excluded values, but a hole comes from a cancelled common factor while a vertical asymptote remains because the denominator is zero after simplification."}]},
+    {"type": "summary", "title": "Before the next lesson", "content": "Use factors to locate zeros, then use multiplicity and the leading term to predict graph shape. For rational functions, list domain restrictions before simplifying."},
+    {"type": "tip", "title": "Study tip", "content": "Draw a five-second rough sketch before using a graphing tool. Then use the tool to check your reasoning, not replace it."}
+  ]
+}

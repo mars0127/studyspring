@@ -82,6 +82,14 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(pages[1]["status"], "skipped")
         self.assertEqual(database.list_pdf_import_jobs(course_id)[0]["status"], "cancelled")
 
+    def test_imported_lesson_persists_after_course_reload(self) -> None:
+        course_id = database.create_course("Advanced Functions", "Mathematics", None)
+        database.create_study_note(course_id, "Imported transformations", "A saved explanation.")
+        reloaded_course = next(course for course in database.list_courses() if course["id"] == course_id)
+        notes = database.list_study_notes(reloaded_course["id"])
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["title"], "Imported transformations")
+
 
 if __name__ == "__main__":
     unittest.main()

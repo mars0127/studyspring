@@ -9,6 +9,8 @@ BLOCK_TYPES = {
     "heading", "paragraph", "definition", "formula", "worked_example",
     "common_mistake", "practice_set", "answer_key", "flashcard_set",
     "multiple_choice_set", "short_answer_set", "resource_link", "callout",
+    "diagram_placeholder", "table", "warning", "tip", "vocabulary",
+    "learning_objective", "estimated_time", "difficulty", "summary",
 }
 
 
@@ -76,6 +78,9 @@ def blocks_to_markdown(blocks: list[dict[str, Any]]) -> str:
         elif kind == "worked_example": output.append(f"### Worked example: {title}\n\n{content}")
         elif kind == "common_mistake": output.append(f"> **Common mistake — {title}**\n> {content}")
         elif kind == "callout": output.append(f"> **{title}**\n> {content}")
+        elif kind == "warning": output.append(f"> **Watch out — {title}**\n> {content}")
+        elif kind == "tip": output.append(f"> **Study tip — {title}**\n> {content}")
+        elif kind == "diagram_placeholder": output.append(f"### Visual: {title}\n\n{content}")
         elif kind == "resource_link": output.append(f"[{block['label']}]({block['url']})")
         elif kind == "flashcard_set": output.append("### Flashcards\n\n" + "\n".join(f"- **{card['front']}**: {card['back']}" for card in block["cards"]))
         elif kind.endswith("_set"):

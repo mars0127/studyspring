@@ -25,9 +25,11 @@ class CoursePackTests(unittest.TestCase):
         course_id = database.install_course_pack(pack, lessons)
         self.assertEqual(course_id, database.install_course_pack(pack, lessons))
         self.assertEqual(len(database.list_courses()), 1)
-        self.assertIn("Function foundations", database.list_study_notes(course_id)[0]["title"])
-        self.assertEqual(len(database.list_flashcards(course_id)), 2)
-        self.assertEqual(len(database.list_quiz_questions(course_id)), 2)
+        titles = [note["title"] for note in database.list_study_notes(course_id)]
+        self.assertIn("Function foundations and transformations", titles)
+        self.assertIn("Polynomial and rational function behaviour", titles)
+        self.assertEqual(len(database.list_flashcards(course_id)), 5)
+        self.assertEqual(len(database.list_quiz_questions(course_id)), 5)
 
 
 if __name__ == "__main__":

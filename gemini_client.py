@@ -108,6 +108,33 @@ Notes:
     return parse_questions(response.text)
 
 
+def generate_study_material(api_key: str, notes: str) -> dict[str, object]:
+    """Generate a small, validated study set from one saved note."""
+    genai, types = _gemini_modules()
+    prompt = f'''Use only the supplied notes. Return JSON with exactly this shape:
+{{"flashcards":[{{"front":"...","back":"..."}}],"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"...","explanation":"..."}}]}}
+Create 4 useful flashcards and 4 multiple-choice questions. Do not invent facts.
+
+Notes:\n{notes[:120000]}'''
+    response = _generate_with_retries(
+        genai.Client(api_key=api_key), model=DEFAULT_MODEL, contents=prompt,
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2),
+    )
+    try:
+        result = json.loads(response.text or "")
+        cards = result["flashcards"]
+        questions = parse_questions(json.dumps({"questions": result["questions"]}))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("The AI returned unusable study material. Please try again.") from error
+    valid_cards = [
+        {"front": str(card.get("front", "")).strip(), "back": str(card.get("back", "")).strip()}
+        for card in cards if isinstance(card, dict) and str(card.get("front", "")).strip() and str(card.get("back", "")).strip()
+    ]
+    if not valid_cards or not questions:
+        raise ValueError("The AI returned no usable study material. Please try again.")
+    return {"flashcards": valid_cards, "questions": questions}
+
+
 def grade_short_answer(
     api_key: str,
     question: str,

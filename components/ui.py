@@ -33,6 +33,16 @@ def course_card(course: dict[str, object], selected: bool = False) -> None:
 def page_navigation(items: list[str]) -> str:
     """Compact top-level navigation that avoids a crowded sidebar."""
     current = resolve_page(st.session_state.get("active_page"), items)
+    if st.session_state.get("primary_navigation") not in items:
+        st.session_state["primary_navigation"] = current
     selected = st.radio("StudySpring navigation", items, index=items.index(current), horizontal=True, label_visibility="collapsed", key="primary_navigation")
     st.session_state["active_page"] = selected
     return selected
+
+
+def open_course(course_id: int) -> None:
+    """Apply course selection before the next navigation widget is constructed."""
+    st.session_state["selected_course_id"] = course_id
+    st.session_state["active_page"] = "Learn"
+    st.session_state["primary_navigation"] = "Learn"
+    st.query_params["course"] = str(course_id)

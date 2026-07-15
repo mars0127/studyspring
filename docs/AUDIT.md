@@ -60,3 +60,9 @@ Resolved in the foundation branch: validated PDF inspection and bounded page pro
 The application shell now routes focused Home, My Courses, Course Library, Imports, Learn, Progress, and Settings views through `pages/views.py`. The prior all-in-one screen is no longer rendered after routing. Further cleanup can remove the retired legacy renderer once the new page-level learning and import workflows cover every advanced action.
 
 Still intentionally deferred: a persistent hosted database for Render, a production-installed local OCR engine, user authentication, public administration, full visual regression testing, and course-pack updates/uninstall flows. The current Streamlit page remains a gradual refactor target; routing is now centralized but study sections still need extraction into dedicated modules in a following cleanup pass.
+
+## Reliability follow-up
+
+- Course selection is now preserved in the browser URL and Streamlit state, so opening a course can safely rerun into Learn.
+- Personal-note generation is an explicit optional Gemini action. Generated flashcards and multiple-choice questions are stored once and linked to the source note.
+- Import jobs checkpoint page results in SQLite, but a free Streamlit/Render request cannot continue running after a student closes or refreshes the page. The student can return to the queue and resume with the same PDF; completed pages remain recorded while the instance remains available.

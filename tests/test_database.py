@@ -97,6 +97,20 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(reloaded["course_pack_id"], "ontario-mhf4u-v1")
         self.assertEqual(reloaded["course_pack_version"], "1.0")
 
+    def test_generated_material_is_saved_once_with_its_source_note(self) -> None:
+        course_id = database.create_course("Biology", "Science", None)
+        database.create_study_note(course_id, "Cells", "Cells divide.")
+        note_id = database.list_study_notes(course_id)[0]["id"]
+        material = {
+            "flashcards": [{"front": "Mitosis", "back": "Cell division"}],
+            "questions": [{"topic": "Cells", "question": "What divides?", "options": ["Cells", "Rocks", "Clouds", "Stars"], "correct_answer": "Cells", "explanation": "The note states cells divide."}],
+        }
+        database.save_generated_material(course_id, note_id, material)
+        self.assertEqual(len(database.list_flashcards(course_id)), 1)
+        self.assertEqual(len(database.list_quiz_questions(course_id)), 1)
+        with self.assertRaises(ValueError):
+            database.save_generated_material(course_id, note_id, material)
+
 
 if __name__ == "__main__":
     unittest.main()

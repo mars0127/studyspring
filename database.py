@@ -65,6 +65,7 @@ def initialize_database() -> None:
                 achievement_category TEXT NOT NULL DEFAULT 'Knowledge & Understanding',
                 marks INTEGER NOT NULL DEFAULT 1,
                 sample_answer TEXT NOT NULL DEFAULT '',
+                source_note_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (course_id) REFERENCES courses(id)
             )
@@ -87,6 +88,8 @@ def initialize_database() -> None:
             connection.execute("ALTER TABLE quiz_questions ADD COLUMN marks INTEGER NOT NULL DEFAULT 1")
         if "sample_answer" not in question_columns:
             connection.execute("ALTER TABLE quiz_questions ADD COLUMN sample_answer TEXT NOT NULL DEFAULT ''")
+        if "source_note_id" not in question_columns:
+            connection.execute("ALTER TABLE quiz_questions ADD COLUMN source_note_id INTEGER")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS quiz_attempts (
@@ -149,11 +152,15 @@ def initialize_database() -> None:
                 course_id INTEGER NOT NULL,
                 front TEXT NOT NULL,
                 back TEXT NOT NULL,
+                source_note_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (course_id) REFERENCES courses(id)
             )
             """
         )
+        flashcard_columns = {row["name"] for row in connection.execute("PRAGMA table_info(flashcards)").fetchall()}
+        if "source_note_id" not in flashcard_columns:
+            connection.execute("ALTER TABLE flashcards ADD COLUMN source_note_id INTEGER")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS pdf_import_jobs (
@@ -677,3 +684,27 @@ def list_flashcards(course_id: int) -> list[dict[str, object]]:
             (course_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def save_generated_material(course_id: int, source_note_id: int, material: dict[str, object]) -> None:
+    """Persist one explicit note-generation result once, linked to its source note."""
+    cards = material.get("flashcards", [])
+    questions = material.get("questions", [])
+    with get_connection() as connection:
+        already_saved = connection.execute(
+            "SELECT 1 FROM flashcards WHERE source_note_id = ? UNION SELECT 1 FROM quiz_questions WHERE source_note_id = ?",
+            (source_note_id, source_note_id),
+        ).fetchone()
+        if already_saved:
+            raise ValueError("Study material has already been generated from this note.")
+        connection.executemany(
+            "INSERT INTO flashcards (course_id, front, back, source_note_id) VALUES (?, ?, ?, ?)",
+            [(course_id, str(card["front"]), str(card["back"]), source_note_id) for card in cards],
+        )
+        for question in questions:
+            connection.execute(
+                """INSERT INTO quiz_questions (course_id, topic, question, options_json, correct_answer, explanation, source_note_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (course_id, str(question["topic"]), str(question["question"]), json.dumps(question["options"]),
+                 str(question["correct_answer"]), str(question.get("explanation", "")), source_note_id),
+            )

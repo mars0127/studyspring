@@ -9,13 +9,14 @@ import os
 import streamlit as st
 from pypdf import PdfReader
 
-from components.ui import empty_state, page_header, status_banner
+from components.ui import empty_state, open_course, page_header, status_banner
 from database import (
     cancel_pdf_import_job, course_attempt_history, course_quiz_stats, course_topic_stats,
     create_course, create_study_note, delete_course, install_course_pack, list_courses,
     list_flashcards, list_pdf_import_jobs, list_pdf_import_pages, list_quiz_questions,
-    list_recent_quiz_sessions, list_study_notes, record_quiz_attempt,
+    list_recent_quiz_sessions, list_study_notes, record_quiz_attempt, save_generated_material,
 )
+from gemini_client import GeminiRequestError, generate_study_material
 from services.course_pack_service import CoursePackError, lesson_text, list_course_packs
 from services.pdf_service import STANDARD_PDF_MAX_MB, PdfImportError, extract_embedded_text, inspect_pdf, validate_pdf_upload
 from services.pdf_service import TEXTBOOK_PDF_MAX_MB
@@ -39,9 +40,13 @@ def _selected_course() -> dict[str, object] | None:
     if not courses:
         return None
     saved = st.session_state.get("selected_course_id")
+    query_value = st.query_params.get("course")
+    if query_value and str(query_value).isdigit():
+        saved = int(str(query_value))
     index = next((i for i, course in enumerate(courses) if course["id"] == saved), 0)
     course = st.selectbox("Current course", courses, index=index, format_func=lambda item: f"{item['name']} · {item['subject']}")
     st.session_state["selected_course_id"] = course["id"]
+    st.query_params["course"] = str(course["id"])
     return course
 
 
@@ -90,8 +95,7 @@ def render_courses() -> None:
         with st.container(border=True):
             left, right = st.columns([4, 1]); left.subheader(str(course["name"])); left.caption(str(course["subject"]))
             if course.get("is_preinstalled"): left.caption("StudySpring Course Pack")
-            if right.button("Open", key=f"open_course_{course['id']}"):
-                st.session_state["selected_course_id"] = course["id"]; st.session_state["active_page"] = "Learn"; st.rerun()
+            right.button("Open", key=f"open_course_{course['id']}", on_click=open_course, args=(int(course["id"]),))
             if not course.get("is_preinstalled") and st.button("Remove", key=f"remove_course_{course['id']}"):
                 delete_course(course["id"]); st.rerun()
 
@@ -195,7 +199,23 @@ def render_learn() -> None:
         notes = list_study_notes(course["id"])
         if not notes: empty_state("No lessons yet", "Import notes or install a Course Pack.")
         for note in notes:
-            with st.expander(note["title"]): st.markdown(note["content"])
+            with st.expander(note["title"]):
+                st.markdown(note["content"])
+                if note["source_group"] != "lesson":
+                    if st.button("Generate flashcards and practice", key=f"generate_note_{note['id']}"):
+                        key = _gemini_key()
+                        if not key:
+                            status_banner("info", "Study material generation needs the optional private Gemini key. Your notes are still saved and available to study.")
+                        else:
+                            try:
+                                material = generate_study_material(key, str(note["content"]))
+                                save_generated_material(int(course["id"]), int(note["id"]), material)
+                            except GeminiRequestError as error:
+                                status_banner("warning", str(error))
+                            except (ValueError, RuntimeError) as error:
+                                status_banner("error", str(error))
+                            else:
+                                status_banner("success", "Flashcards and practice questions were saved to this course.")
     with tabs[1]:
         cards = list_flashcards(course["id"])
         if not cards: empty_state("No flashcards yet", "Course Packs and your own study work can add flashcards.")

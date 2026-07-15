@@ -1139,7 +1139,6 @@ st.divider()
 with st.expander("About StudySpring and your privacy"):
     st.write(
         "StudySpring stores courses, notes, flashcards, and quiz progress in a local SQLite "
-        "database on this computer. The core features do not send study material anywhere. "
-        "If you use AI question generation, StudySpring sends only the note you selected to "
-        f"Google Gemini ({DEFAULT_MODEL}) to create questions."
+        "database on YOUR computer. Our features do not send study material anywhere. "
+        "AI question generation is done through Google Gemini"
     )

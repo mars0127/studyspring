@@ -1,0 +1,31 @@
+{
+  "id": "ontario-mhf4u-v1",
+  "title": "Ontario Grade 12 Advanced Functions (MHF4U)",
+  "curriculum": "Ontario Secondary School Curriculum",
+  "jurisdiction": "Ontario, Canada",
+  "grade": "12",
+  "course_code": "MHF4U",
+  "subject": "Mathematics",
+  "description": "An original StudySpring learning unit for function characteristics, transformations, inverses, and composition.",
+  "version": "1.0.0",
+  "author": "StudySpring",
+  "license": "CC BY 4.0",
+  "sources": [
+    {
+      "title": "The Ontario Curriculum: Grades 11 and 12, Mathematics",
+      "organization": "Ontario Ministry of Education",
+      "url": "https://www.ontario.ca/page/curriculum-and-resources",
+      "license": "Curriculum expectations referenced; lesson content is original",
+      "accessed": "2026-07-15"
+    }
+  ],
+  "units": [
+    {
+      "id": "function-foundations",
+      "title": "Function foundations and transformations",
+      "estimated_minutes": 180,
+      "topics": ["function characteristics", "transformations", "inverses", "composition"],
+      "lesson_file": "units/function_foundations.md"
+    }
+  ]
+}

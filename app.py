@@ -22,6 +22,7 @@ from database import (
     delete_course,
     delete_study_note,
     initialize_database,
+    install_course_pack,
     list_courses,
     list_flashcards,
     list_quiz_questions,
@@ -58,6 +59,7 @@ from services.pdf_service import (
     validate_pdf_upload,
     validate_page_range,
 )
+from services.course_pack_service import CoursePackError, lesson_text, list_course_packs
 
 
 MAX_SELECTED_SCANNED_PDF_PAGES = MAX_PROCESSING_PAGES
@@ -238,6 +240,31 @@ with st.sidebar:
         else:
             st.success("Course added!")
             st.rerun()
+
+    st.divider()
+    st.subheader("Course Library")
+    st.caption("Install an original StudySpring course pack. Your personal notes stay separate.")
+    try:
+        available_packs = list_course_packs()
+    except CoursePackError:
+        available_packs = []
+        st.warning("The Course Library is temporarily unavailable.")
+    for pack in available_packs:
+        with st.expander(f"{pack['course_code']} · {pack['title']}"):
+            st.write(str(pack["description"]))
+            st.caption(f"{pack['curriculum']} · Grade {pack['grade']} · Version {pack['version']}")
+            st.write("Includes: " + ", ".join(str(unit["title"]) for unit in pack["units"]))
+            if st.button("Install course pack", key=f"install_pack_{pack['id']}", width="stretch"):
+                try:
+                    installed_course_id = install_course_pack(
+                        pack, [(unit, lesson_text(pack, unit)) for unit in pack["units"]]
+                    )
+                except (CoursePackError, ValueError):
+                    st.error("StudySpring could not install that course pack. Nothing was changed.")
+                else:
+                    st.success("Course pack installed. You can now add your own notes and practise from it.")
+                    st.session_state["selected_course_id"] = installed_course_id
+                    st.rerun()
 
     st.divider()
     st.subheader("Ontario course starters")

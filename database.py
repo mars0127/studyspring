@@ -34,6 +34,8 @@ def initialize_database() -> None:
                 subject TEXT NOT NULL,
                 exam_date TEXT,
                 is_preinstalled INTEGER NOT NULL DEFAULT 0,
+                course_pack_id TEXT NOT NULL DEFAULT '',
+                course_pack_version TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -45,6 +47,10 @@ def initialize_database() -> None:
             connection.execute(
                 "ALTER TABLE courses ADD COLUMN is_preinstalled INTEGER NOT NULL DEFAULT 0"
             )
+        if "course_pack_id" not in course_columns:
+            connection.execute("ALTER TABLE courses ADD COLUMN course_pack_id TEXT NOT NULL DEFAULT ''")
+        if "course_pack_version" not in course_columns:
+            connection.execute("ALTER TABLE courses ADD COLUMN course_pack_version TEXT NOT NULL DEFAULT ''")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -236,7 +242,31 @@ def create_course(
             "INSERT INTO courses (name, subject, exam_date, is_preinstalled) VALUES (?, ?, ?, ?)",
             (clean_name, clean_subject, exam_date, int(is_preinstalled)),
         )
-        return int(cursor.lastrowid)
+    return int(cursor.lastrowid)
+
+
+def install_course_pack(pack: dict[str, object], lessons: list[tuple[dict[str, object], str]]) -> int:
+    """Install one validated pack atomically, without duplicating a prior install."""
+    pack_id = str(pack["id"])
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id FROM courses WHERE course_pack_id = ?", (pack_id,)
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cursor = connection.execute(
+            """INSERT INTO courses (name, subject, exam_date, is_preinstalled, course_pack_id, course_pack_version)
+               VALUES (?, ?, NULL, 1, ?, ?)""",
+            (str(pack["title"]), str(pack["subject"]), pack_id, str(pack["version"])),
+        )
+        course_id = int(cursor.lastrowid)
+        for unit, content in lessons:
+            connection.execute(
+                """INSERT INTO study_notes (course_id, title, content, unit, chapter, lesson, source_group)
+                   VALUES (?, ?, ?, ?, '', ?, 'lesson')""",
+                (course_id, str(unit["title"]), content, str(unit["title"]), "Course pack lesson"),
+            )
+        return course_id
 
 
 def update_course(course_id: int, name: str, subject: str, exam_date: str | None) -> None:

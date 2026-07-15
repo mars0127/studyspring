@@ -85,6 +85,10 @@ streamlit run app.py --server.port $PORT --server.address 0.0.0.0
 
 Render's free tier has limited CPU, memory, request time, and no persistent disk. Keep textbook ranges small, configure `GEMINI_API_KEY` only in Render's private environment settings, and expect the service to sleep when unused.
 
+### Pull-request previews
+
+Render preview deployments are enabled in **Manual** mode. Add the `render-preview` label to a pull request when a temporary hosted review environment is needed. Render exposes `IS_PULL_REQUEST` only in those previews, and StudySpring displays a visible preview banner there. Preview data is temporary SQLite data; do not add production secrets or personal student material to a preview environment.
+
 ## Current limitations and next phase
 
 - A public deployment has no student accounts or durable database storage.

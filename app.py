@@ -71,6 +71,11 @@ st.set_page_config(page_title="StudySpring", page_icon="🌱", layout="wide")
 apply_design_system()
 initialize_database()
 
+# Render sets this only for a pull-request preview. Keep the environment obvious
+# so preview testers do not mistake temporary data for the live product.
+if os.getenv("IS_PULL_REQUEST"):
+    st.warning("Preview Deployment — this temporary version uses preview-only, non-production data.")
+
 
 def gemini_api_key() -> str | None:
     """Read a private key from Streamlit secrets or the local environment."""

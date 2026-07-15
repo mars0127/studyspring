@@ -62,6 +62,7 @@ from services.pdf_service import (
     validate_page_range,
 )
 from services.course_pack_service import CoursePackError, lesson_text, list_course_packs
+from pages.views import render_page
 
 
 MAX_SELECTED_SCANNED_PDF_PAGES = MAX_PROCESSING_PAGES
@@ -225,7 +226,9 @@ def make_progress_csv(attempts: list[dict[str, object]]) -> str:
 
 st.title("🌱 StudySpring")
 st.subheader("Turn your notes into a clearer study plan.")
-active_page = page_navigation(["Home", "My Courses", "Course Library", "Import Material", "Study", "Progress", "Settings"])
+active_page = page_navigation(["Home", "My Courses", "Course Library", "Imports", "Learn", "Progress", "Settings"])
+render_page(active_page)
+st.stop()
 
 if active_page == "Course Library":
     page_header("Course Library", "Preview and install original StudySpring course packs.")

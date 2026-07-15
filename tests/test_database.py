@@ -64,6 +64,16 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(pages[0]["extracted_text"], "Cell notes")
         self.assertEqual(pages[1]["status"], "failed")
 
+    def test_pdf_import_can_be_cancelled_without_losing_completed_pages(self) -> None:
+        course_id = database.create_course("Physics", "Science", None)
+        job_id = database.create_or_resume_pdf_import_job(course_id, "hash-two", "book.pdf", 1, 2)
+        database.save_pdf_import_page(job_id, 1, "completed", "embedded_text", "Saved page")
+        database.cancel_pdf_import_job(job_id)
+        pages = database.list_pdf_import_pages(job_id)
+        self.assertEqual(pages[0]["status"], "completed")
+        self.assertEqual(pages[1]["status"], "skipped")
+        self.assertEqual(database.list_pdf_import_jobs(course_id)[0]["status"], "cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

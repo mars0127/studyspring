@@ -12,6 +12,7 @@ from pypdf import PdfReader
 
 from database import (
     complete_pdf_import_job,
+    cancel_pdf_import_job,
     create_course,
     create_flashcard,
     create_quiz_question,
@@ -28,6 +29,7 @@ from database import (
     list_quiz_questions,
     list_recent_quiz_sessions,
     list_pdf_import_pages,
+    list_pdf_import_jobs,
     list_study_notes,
     record_quiz_attempt,
     record_quiz_session,
@@ -46,8 +48,8 @@ from gemini_client import (
     grade_short_answer,
     generate_questions,
 )
-from course_starters import COURSE_STARTERS
 from components.design import apply_design_system
+from components.ui import course_card, empty_state, page_header, page_navigation, status_banner
 from services.pdf_service import (
     MAX_PROCESSING_PAGES,
     STANDARD_PDF_MAX_MB,
@@ -218,6 +220,7 @@ def make_progress_csv(attempts: list[dict[str, object]]) -> str:
 
 st.title("🌱 StudySpring")
 st.subheader("Turn your notes into a clearer study plan.")
+active_page = page_navigation(["Home", "My Courses", "Course Library", "Import Material", "Study", "Progress", "Settings"])
 
 with st.sidebar:
     st.header("🌱 StudySpring")
@@ -265,33 +268,6 @@ with st.sidebar:
                     st.success("Course pack installed. You can now add your own notes and practise from it.")
                     st.session_state["selected_course_id"] = installed_course_id
                     st.rerun()
-
-    st.divider()
-    st.subheader("Ontario course starters")
-    st.caption("Add a course roadmap with organized units and a free learning-resource link.")
-    starter_choice = st.selectbox("Choose a starter course", list(COURSE_STARTERS))
-    starter = COURSE_STARTERS[starter_choice]
-    if st.button("Add starter course", width="stretch"):
-        try:
-            course_id = create_course(
-                starter["name"], starter["subject"], None, is_preinstalled=True
-            )
-            for number, (unit_name, overview) in enumerate(starter["units"], start=1):
-                create_study_note(
-                    course_id,
-                    f"Unit {number}: {unit_name}",
-                    f"Course roadmap\n\n{overview}\n\n"
-                    f"For deeper study, use [{starter['resource_label']}]({starter['resource_url']}) "
-                    "alongside your teacher's materials and textbook.",
-                    unit=f"Unit {number}: {unit_name}",
-                    lesson="Course roadmap",
-                    source_group="lesson",
-                )
-        except ValueError as error:
-            st.error(str(error))
-        else:
-            st.success("Starter course added with its unit roadmap!")
-            st.rerun()
 
 # SQLite returns special row objects. Streamlit dropdowns work best with
 # ordinary dictionaries, so convert the rows before presenting course options.
@@ -549,17 +525,49 @@ with st.expander("Add study material", expanded=not study_notes):
                     )
                     saved_text = "\n\n".join(text for text in page_texts if text.strip())
                     if saved_text:
-                        create_study_note(
-                            selected_course["id"], f"{textbook_pdf.name.rsplit('.', 1)[0]} pages {first_page}-{last_page}",
-                            saved_text, new_note_unit, new_note_lesson, new_note_chapter, "textbook",
-                        )
+                        st.session_state["textbook_preview"] = {
+                            "course_id": selected_course["id"], "title": f"{textbook_pdf.name.rsplit('.', 1)[0]} pages {first_page}-{last_page}",
+                            "content": saved_text,
+                        }
                     if failed_pages:
-                        st.warning(f"Saved the readable pages. Page(s) {', '.join(map(str, failed_pages))} can be retried later.")
+                        st.warning(f"Completed pages are ready to review. Page(s) {', '.join(map(str, failed_pages))} can be retried below.")
                     elif saved_text:
-                        st.success("Selected textbook pages were saved as editable study material.")
-                        st.rerun()
+                        st.success("Pages are ready for you to review and save.")
                     else:
                         st.error("No readable text was found in those pages. Try clearer pages or OCR the document first.")
+                jobs = list_pdf_import_jobs(selected_course["id"])
+                if jobs:
+                    with st.expander("Textbook processing history", expanded=False):
+                        for job in jobs:
+                            pages = list_pdf_import_pages(int(job["id"]))
+                            counts = {status: sum(page["status"] == status for page in pages) for status in ("completed", "failed", "pending", "skipped")}
+                            st.write(f"**{job['filename']} · pages {job['first_page']}-{job['last_page']}** — {job['status']}")
+                            st.caption(f"{counts['completed']} completed · {counts['failed']} failed · {counts['pending']} waiting · {counts['skipped']} skipped")
+                            for page in pages:
+                                st.caption(f"Page {page['page_number']}: {page['status']} · {page['extraction_method'] or 'not processed'}")
+                            if job["status"] not in {"completed", "cancelled"} and st.button("Cancel remaining pages", key=f"cancel_import_{job['id']}"):
+                                cancel_pdf_import_job(int(job["id"]))
+                                st.rerun()
+                            if counts["failed"] and textbook_pdf is not None and st.button("Retry failed pages", key=f"retry_import_{job['id']}"):
+                                progress = st.progress(0, text="Retrying unfinished pages...")
+                                process_textbook_range(course_id=selected_course["id"], filename=textbook_pdf.name, pdf_bytes=textbook_bytes, first_page=int(job["first_page"]), last_page=int(job["last_page"]), api_key=gemini_api_key(), progress=progress)
+                                st.rerun()
+                preview = st.session_state.get("textbook_preview")
+                if preview and preview["course_id"] == selected_course["id"]:
+                    with st.form("save_textbook_preview"):
+                        st.caption("Review or correct the extracted text before saving it to this course.")
+                        preview_title = st.text_input("Material title", value=str(preview["title"]))
+                        corrected_text = st.text_area("Extracted text", value=str(preview["content"]), height=280)
+                        save_preview = st.form_submit_button("Save reviewed textbook material", width="stretch")
+                    if save_preview:
+                        try:
+                            create_study_note(selected_course["id"], preview_title, corrected_text, source_group="textbook")
+                        except ValueError as error:
+                            st.error(str(error))
+                        else:
+                            del st.session_state["textbook_preview"]
+                            st.success("Reviewed textbook material saved.")
+                            st.rerun()
             except (PdfImportError, ValueError) as error:
                 st.error(str(error))
             except Exception:

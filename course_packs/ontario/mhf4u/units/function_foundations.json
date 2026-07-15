@@ -1,0 +1,18 @@
+{
+  "title": "Function foundations and transformations",
+  "blocks": [
+    {"type": "heading", "content": "Function foundations and transformations"},
+    {"type": "paragraph", "content": "Functions model relationships where every input has exactly one output. This unit reviews the features you need before studying advanced function families."},
+    {"type": "definition", "title": "Domain and range", "content": "The domain is every allowed input. The range is every output the function can produce."},
+    {"type": "formula", "title": "Transformation form", "content": "g(x) = a f(k(x - d)) + c"},
+    {"type": "worked_example", "title": "Reading a transformation", "content": "For g(x) = -2f(x - 3) + 1, move the graph right 3, reflect it in the x-axis, stretch vertically by 2, then move it up 1."},
+    {"type": "common_mistake", "title": "Inside versus outside", "content": "A change inside f( ) affects x-values and moves horizontally in the opposite-looking direction. A change outside affects y-values directly."},
+    {"type": "paragraph", "content": "An inverse undoes a function. A function has an inverse function only when it is one-to-one on the chosen domain. Composition means feeding the output of one function into another."},
+    {"type": "practice_set", "title": "Try it", "content": "1. Describe the transformations from f(x) to -3f(x + 2) - 4.\n2. Explain why f(x)=x² needs a restricted domain before it has an inverse function.\n3. If f(x)=2x+1 and g(x)=x², find (g∘f)(x)."},
+    {"type": "answer_key", "title": "Check your work", "content": "1. Left 2, reflect in x-axis, vertical stretch by 3, down 4.\n2. x² is not one-to-one over all real numbers.\n3. (2x+1)²."},
+    {"type": "flashcard_set", "cards": [{"front": "What does an inverse function do?", "back": "It reverses the input-output relationship of the original function."}, {"front": "What condition allows a function to have an inverse function?", "back": "It must be one-to-one on its domain."}]},
+    {"type": "multiple_choice_set", "questions": [{"topic": "Transformations", "question": "Which transformation is represented by f(x-4)?", "options": ["4 units right", "4 units left", "4 units up", "4 units down"], "correct_answer": "4 units right", "explanation": "A horizontal shift inside the function uses the opposite sign."}]},
+    {"type": "short_answer_set", "questions": [{"topic": "Composition", "question": "Explain why function composition can be useful in a real-world model.", "sample_answer": "A strong answer explains that multi-step processes can be represented by applying one relationship after another and gives a relevant example."}]},
+    {"type": "resource_link", "label": "Ontario mathematics curriculum", "url": "https://www.ontario.ca/page/curriculum-and-resources"}
+  ]
+}

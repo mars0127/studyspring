@@ -266,6 +266,26 @@ def install_course_pack(pack: dict[str, object], lessons: list[tuple[dict[str, o
                    VALUES (?, ?, ?, ?, '', ?, 'lesson')""",
                 (course_id, str(unit["title"]), content, str(unit["title"]), "Course pack lesson"),
             )
+            for block in unit.get("blocks", []):
+                if block.get("type") == "flashcard_set":
+                    connection.executemany(
+                        "INSERT INTO flashcards (course_id, front, back) VALUES (?, ?, ?)",
+                        [(course_id, card["front"], card["back"]) for card in block["cards"]],
+                    )
+                elif block.get("type") == "multiple_choice_set":
+                    for question in block["questions"]:
+                        connection.execute(
+                            """INSERT INTO quiz_questions (course_id, topic, question, options_json, correct_answer, explanation)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (course_id, question["topic"], question["question"], json.dumps(question["options"]), question["correct_answer"], question.get("explanation", "")),
+                        )
+                elif block.get("type") == "short_answer_set":
+                    for question in block["questions"]:
+                        connection.execute(
+                            """INSERT INTO quiz_questions (course_id, topic, question, options_json, correct_answer, question_type, sample_answer)
+                               VALUES (?, ?, ?, '[]', ?, 'short_answer', ?)""",
+                            (course_id, question["topic"], question["question"], question["sample_answer"], question["sample_answer"]),
+                        )
         return course_id
 
 
@@ -369,13 +389,35 @@ def save_pdf_import_page(
 
 def complete_pdf_import_job(job_id: int) -> None:
     with get_connection() as connection:
-        failed = connection.execute(
-            "SELECT COUNT(*) AS count FROM pdf_import_pages WHERE job_id = ? AND status = 'failed'",
+        unfinished = connection.execute(
+            "SELECT COUNT(*) AS count FROM pdf_import_pages WHERE job_id = ? AND status IN ('failed', 'pending', 'processing')",
             (job_id,),
         ).fetchone()["count"]
         connection.execute(
             "UPDATE pdf_import_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            ("partial" if failed else "completed", job_id),
+            ("partial" if unfinished else "completed", job_id),
+        )
+
+
+def list_pdf_import_jobs(course_id: int) -> list[dict[str, object]]:
+    """List a course's recoverable textbook imports, newest first."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT id, filename, first_page, last_page, status, updated_at
+               FROM pdf_import_jobs WHERE course_id = ? ORDER BY id DESC""", (course_id,)
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def cancel_pdf_import_job(job_id: int) -> None:
+    """Stop an import without discarding completed page checkpoints."""
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE pdf_import_pages SET status = 'skipped', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND status IN ('pending', 'processing')",
+            (job_id,),
+        )
+        connection.execute(
+            "UPDATE pdf_import_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (job_id,)
         )
 
 

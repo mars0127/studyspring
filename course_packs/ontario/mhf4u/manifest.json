@@ -25,7 +25,7 @@
       "title": "Function foundations and transformations",
       "estimated_minutes": 180,
       "topics": ["function characteristics", "transformations", "inverses", "composition"],
-      "lesson_file": "units/function_foundations.md"
+      "lesson_file": "units/function_foundations.json"
     }
   ]
 }

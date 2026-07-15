@@ -26,6 +26,8 @@ class CoursePackTests(unittest.TestCase):
         self.assertEqual(course_id, database.install_course_pack(pack, lessons))
         self.assertEqual(len(database.list_courses()), 1)
         self.assertIn("Function foundations", database.list_study_notes(course_id)[0]["title"])
+        self.assertEqual(len(database.list_flashcards(course_id)), 2)
+        self.assertEqual(len(database.list_quiz_questions(course_id)), 2)
 
 
 if __name__ == "__main__":

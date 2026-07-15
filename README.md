@@ -91,3 +91,28 @@ Render's free tier has limited CPU, memory, request time, and no persistent disk
 - The optional Gemini free tier can return a quota message; wait briefly and retry with fewer pages or less text.
 - Course starters are roadmaps, not full installable course packs yet.
 - The next planned PR introduces validated, openly licensed Course Packs and a Course Library. It will not copy commercial textbooks.
+## Milestone 1 navigation and course packs
+
+StudySpring now has top-level navigation for Home, My Courses, Course Library, Import Material, Study, Progress, and Settings. The current Streamlit implementation keeps study tools on the selected course dashboard while the application is being progressively separated into view modules; it does not use fragile global widget selectors.
+
+Prebuilt courses are installed only from **Course Library**. The former Ontario starter-course menu has been removed. Students can still create a blank course for their own class.
+
+### Course Pack format
+
+Course Packs are version-controlled, original or openly licensed content. A lesson can be legacy Markdown during migration, but new lessons use JSON `blocks`, including headings, paragraphs, definitions, formulas, worked examples, common mistakes, practice sets, answer keys, flashcards, multiple-choice questions, short-answer questions, resource links, and callouts.
+
+To validate a pack locally:
+
+```powershell
+.\.venv\Scripts\python.exe tools\course_pack.py validate course_packs\ontario\mhf4u\manifest.json
+```
+
+To create a local authoring scaffold (this is not exposed in the public website):
+
+```powershell
+.\.venv\Scripts\python.exe tools\course_pack.py scaffold course_packs\ontario\new-course --id ontario-new-course-v1
+```
+
+### Textbook imports
+
+Textbooks are inspected before processing. Choose no more than the configured page range at a time. Each page is checkpointed as embedded text, Gemini OCR, failed, or skipped. Completed pages survive a failed page; students can review/correct extracted text before saving and retry a failed range after re-uploading the same PDF. Render free storage remains temporary, so long-term persistence requires a future persistent database/storage plan.

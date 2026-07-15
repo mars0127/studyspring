@@ -53,3 +53,8 @@ Each change is isolated behind the new import workflow and focused commits. Reve
 ## Figma status
 
 No accessible StudySpring Figma file was available in this Codex session, so no Figma review is claimed. The UI work in this PR will use an implementation-ready calm-productivity token set and reusable Streamlit components; a connected Figma design can be compared in a later visual-review pass.
+# Milestone 1 update
+
+Resolved in the foundation branch: validated PDF inspection and bounded page processing, per-page checkpoints, cancellation without deleting completed output, retry controls, Course Pack installation, removal of the duplicate starter-course workflow, structured lesson block validation, and a local-only authoring helper.
+
+Still intentionally deferred: a persistent hosted database for Render, a production-installed local OCR engine, user authentication, public administration, full visual regression testing, and course-pack updates/uninstall flows. The current Streamlit page remains a gradual refactor target; routing is now centralized but study sections still need extraction into dedicated modules in a following cleanup pass.

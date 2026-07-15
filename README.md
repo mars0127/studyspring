@@ -1,5 +1,7 @@
 # StudySpring
 
+For product direction, educational-content standards, and the Course Pack model, read [the StudySpring Product Specification](docs/PRODUCT_SPEC.md).
+
 StudySpring is a beginner-friendly study dashboard. Students can create courses, save typed notes or short PDFs, practise with quizzes, and see which topics need more review. It was made by Mars Sun, Kenneth Wu, and Bernard Kim.
 
 ## Version 1 goals

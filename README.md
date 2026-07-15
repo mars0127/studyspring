@@ -52,6 +52,24 @@ studyspring/
 3. Install packages from `requirements.txt`.
 4. Run `streamlit run app.py`.
 
+## Deploying to a public URL (web)
+
+This project is a regular Streamlit app. To get a real website URL, deploy the repo to any Streamlit-capable host (Render, Railway, Fly.io, etc.).
+
+### What I added for deployment
+- `Procfile`: runs `streamlit run app.py` bound to `0.0.0.0`.
+- `Dockerfile` (optional): consistent builds.
+
+### Steps (Render/Railway-style)
+1. Create a new “Web Service” from this GitHub repository.
+2. Use the default Python buildpack/container.
+3. Ensure the app command is `streamlit run app.py --server.address 0.0.0.0 --server.port 8501` (or just rely on `Procfile`).
+4. (Optional) Add environment variable `GEMINI_API_KEY` if you want AI question generation / scan transcription.
+
+### Important note about data
+By default, StudySpring writes to a local SQLite file (`studyspring.db`). On hosted platforms, that database is stored on the server instance. If the host recreates instances, you may lose saved data unless you configure persistent storage.
+
+
 To run the automated checks:
 
 ```text

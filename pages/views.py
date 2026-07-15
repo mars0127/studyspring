@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from io import BytesIO
+import os
 
 import streamlit as st
 from pypdf import PdfReader
@@ -17,6 +18,16 @@ from database import (
 )
 from services.course_pack_service import CoursePackError, lesson_text, list_course_packs
 from services.pdf_service import STANDARD_PDF_MAX_MB, PdfImportError, extract_embedded_text, inspect_pdf, validate_pdf_upload
+from services.pdf_service import TEXTBOOK_PDF_MAX_MB
+from services.textbook_import_service import process_textbook_range
+
+
+def _gemini_key() -> str | None:
+    """Read the optional private key without exposing it in the interface."""
+    try:
+        return st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+    except Exception:
+        return os.getenv("GEMINI_API_KEY")
 
 
 def _courses() -> list[dict[str, object]]:
@@ -127,6 +138,36 @@ def render_imports() -> None:
                 if not text: raise PdfImportError("No readable text was found. Use a scanned-textbook import instead.")
                 st.session_state["import_preview"] = {"title": upload.name.removesuffix(".pdf"), "content": text}
             except (PdfImportError, ValueError) as error: st.error(str(error))
+    with st.container(border=True):
+        st.subheader("Import your own material")
+        st.caption("For a textbook or scanned handout, select up to 20 pages. Pages with normal PDF text stay local; only unreadable scans use the optional private AI reader when it is configured.")
+        textbook = st.file_uploader(
+            f"Choose a textbook PDF (up to {TEXTBOOK_PDF_MAX_MB} MB)", type=["pdf"], key="shell_textbook_pdf"
+        )
+        if textbook:
+            try:
+                textbook_data = textbook.getvalue()
+                details = inspect_pdf(textbook.name, textbook_data, TEXTBOOK_PDF_MAX_MB)
+                st.caption(f"{details.page_count} pages · {details.file_size_bytes / 1024 / 1024:.1f} MB · {details.document_kind} ({details.readable_text_percentage}% readable sample)")
+                first, last = st.columns(2)
+                first_page = first.number_input("First page", min_value=1, max_value=details.page_count, value=1, key="shell_textbook_first")
+                last_page = last.number_input("Last page", min_value=1, max_value=details.page_count, value=min(details.page_count, 20), key="shell_textbook_last")
+                if st.button("Read selected pages", type="primary", key="shell_process_textbook"):
+                    progress = st.progress(0, text="Preparing selected pages…")
+                    def update(done: int, total: int, message: str) -> None:
+                        progress.progress(done / total if total else 0, text=message)
+                    texts, failed = process_textbook_range(
+                        course_id=int(course["id"]), filename=textbook.name, pdf_bytes=textbook_data,
+                        first_page=int(first_page), last_page=int(last_page), api_key=_gemini_key(), progress=update,
+                    )
+                    if texts:
+                        st.session_state["import_preview"] = {"title": textbook.name.removesuffix(".pdf"), "content": "\n\n".join(texts)}
+                    if failed:
+                        status_banner("warning", f"Saved the pages that could be read. Page(s) {', '.join(map(str, failed))} can be retried from the processing queue.")
+                    elif texts:
+                        status_banner("success", "Selected pages are ready to review and save.")
+            except (PdfImportError, ValueError) as error:
+                status_banner("error", str(error))
     preview = st.session_state.get("import_preview")
     if preview:
         with st.form("shell_import_preview"):

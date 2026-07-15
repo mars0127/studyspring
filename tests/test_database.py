@@ -90,6 +90,13 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertEqual(notes[0]["title"], "Imported transformations")
 
+    def test_installed_course_keeps_pack_identity_after_reload(self) -> None:
+        pack = {"id": "ontario-mhf4u-v1", "title": "Advanced Functions", "subject": "Mathematics", "version": "1.0"}
+        course_id = database.install_course_pack(pack, [])
+        reloaded = next(course for course in database.list_courses() if course["id"] == course_id)
+        self.assertEqual(reloaded["course_pack_id"], "ontario-mhf4u-v1")
+        self.assertEqual(reloaded["course_pack_version"], "1.0")
+
 
 if __name__ == "__main__":
     unittest.main()

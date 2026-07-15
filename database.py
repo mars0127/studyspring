@@ -328,7 +328,9 @@ def list_courses() -> list[sqlite3.Row]:
     """Return courses in the order the student created them."""
     with get_connection() as connection:
         return connection.execute(
-            "SELECT id, name, subject, exam_date, is_preinstalled FROM courses ORDER BY id DESC"
+            """SELECT id, name, subject, exam_date, is_preinstalled,
+                      course_pack_id, course_pack_version
+               FROM courses ORDER BY id DESC"""
         ).fetchall()
 
 

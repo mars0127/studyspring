@@ -57,4 +57,6 @@ No accessible StudySpring Figma file was available in this Codex session, so no 
 
 Resolved in the foundation branch: validated PDF inspection and bounded page processing, per-page checkpoints, cancellation without deleting completed output, retry controls, Course Pack installation, removal of the duplicate starter-course workflow, structured lesson block validation, and a local-only authoring helper.
 
+The application shell now routes focused Home, My Courses, Course Library, Imports, Learn, Progress, and Settings views through `pages/views.py`. The prior all-in-one screen is no longer rendered after routing. Further cleanup can remove the retired legacy renderer once the new page-level learning and import workflows cover every advanced action.
+
 Still intentionally deferred: a persistent hosted database for Render, a production-installed local OCR engine, user authentication, public administration, full visual regression testing, and course-pack updates/uninstall flows. The current Streamlit page remains a gradual refactor target; routing is now centralized but study sections still need extraction into dedicated modules in a following cleanup pass.

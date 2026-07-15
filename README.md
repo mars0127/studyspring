@@ -97,6 +97,10 @@ Render preview deployments are enabled in **Manual** mode. Add the `render-previ
 - Course Packs are still a pilot system and do not yet include every Ontario course.
 ## Milestone 1 navigation and course packs
 
+### Application shell
+
+StudySpring now routes its primary destinations through focused page renderers in `pages/views.py`: Home, My Courses, Course Library, Imports, Learn, Progress, and Settings. Each renderer owns one purpose and is selected by centralized navigation in `app.py`. The reusable page header, status, empty-state, and navigation helpers remain in `components/`.
+
 StudySpring now has top-level navigation for Home, My Courses, Course Library, Import Material, Study, Progress, and Settings. The current Streamlit implementation keeps study tools on the selected course dashboard while the application is being progressively separated into view modules; it does not use fragile global widget selectors.
 
 Prebuilt courses are installed only from **Course Library**. The former Ontario starter-course menu has been removed. Students can still create a blank course for their own class.

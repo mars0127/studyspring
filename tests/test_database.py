@@ -53,6 +53,17 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(database.list_courses(), [])
         self.assertEqual(database.list_study_notes(course["id"]), [])
 
+    def test_pdf_import_pages_are_checkpointed(self) -> None:
+        course_id = database.create_course("Biology", "Science", None)
+        job_id = database.create_or_resume_pdf_import_job(course_id, "hash", "book.pdf", 1, 2)
+        self.assertEqual(job_id, database.create_or_resume_pdf_import_job(course_id, "hash", "book.pdf", 1, 2))
+        database.save_pdf_import_page(job_id, 1, "completed", "embedded_text", "Cell notes")
+        database.save_pdf_import_page(job_id, 2, "failed", error_message="Unreadable")
+        database.complete_pdf_import_job(job_id)
+        pages = database.list_pdf_import_pages(job_id)
+        self.assertEqual(pages[0]["extracted_text"], "Cell notes")
+        self.assertEqual(pages[1]["status"], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()

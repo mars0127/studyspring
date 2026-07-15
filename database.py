@@ -148,6 +148,39 @@ def initialize_database() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_import_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course_id INTEGER NOT NULL,
+                document_hash TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                first_page INTEGER NOT NULL,
+                last_page INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(course_id, document_hash, first_page, last_page),
+                FOREIGN KEY (course_id) REFERENCES courses(id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_import_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                extraction_method TEXT NOT NULL DEFAULT '',
+                extracted_text TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(job_id, page_number),
+                FOREIGN KEY (job_id) REFERENCES pdf_import_jobs(id)
+            )
+            """
+        )
 
 
 def record_quiz_session(
@@ -247,6 +280,73 @@ def list_courses() -> list[sqlite3.Row]:
         return connection.execute(
             "SELECT id, name, subject, exam_date, is_preinstalled FROM courses ORDER BY id DESC"
         ).fetchall()
+
+
+def create_or_resume_pdf_import_job(
+    course_id: int, document_hash: str, filename: str, first_page: int, last_page: int
+) -> int:
+    """Create a checkpointed import job, or resume an identical incomplete job."""
+    with get_connection() as connection:
+        existing = connection.execute(
+            """SELECT id FROM pdf_import_jobs
+               WHERE course_id = ? AND document_hash = ? AND first_page = ? AND last_page = ?""",
+            (course_id, document_hash, first_page, last_page),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cursor = connection.execute(
+            """INSERT INTO pdf_import_jobs (course_id, document_hash, filename, first_page, last_page)
+               VALUES (?, ?, ?, ?, ?)""",
+            (course_id, document_hash, filename, first_page, last_page),
+        )
+        job_id = int(cursor.lastrowid)
+        connection.executemany(
+            "INSERT INTO pdf_import_pages (job_id, page_number) VALUES (?, ?)",
+            [(job_id, page_number) for page_number in range(first_page, last_page + 1)],
+        )
+        return job_id
+
+
+def list_pdf_import_pages(job_id: int) -> list[dict[str, object]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT page_number, status, extraction_method, extracted_text, error_message
+               FROM pdf_import_pages WHERE job_id = ? ORDER BY page_number""",
+            (job_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_pdf_import_page(
+    job_id: int, page_number: int, status: str, extraction_method: str = "", text: str = "", error_message: str = ""
+) -> None:
+    """Persist each page immediately so an interrupted import remains recoverable."""
+    if status not in {"pending", "processing", "completed", "failed", "skipped"}:
+        raise ValueError("Unsupported PDF import status.")
+    with get_connection() as connection:
+        connection.execute(
+            """UPDATE pdf_import_pages
+               SET status = ?, extraction_method = ?, extracted_text = ?, error_message = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE job_id = ? AND page_number = ?""",
+            (status, extraction_method, text, error_message[:500], job_id, page_number),
+        )
+        connection.execute(
+            """UPDATE pdf_import_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+            (status, job_id),
+        )
+
+
+def complete_pdf_import_job(job_id: int) -> None:
+    with get_connection() as connection:
+        failed = connection.execute(
+            "SELECT COUNT(*) AS count FROM pdf_import_pages WHERE job_id = ? AND status = 'failed'",
+            (job_id,),
+        ).fetchone()["count"]
+        connection.execute(
+            "UPDATE pdf_import_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            ("partial" if failed else "completed", job_id),
+        )
 
 
 def create_study_note(

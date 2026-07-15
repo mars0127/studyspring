@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 
 
 # Stable multimodal model designed for high-volume extraction work.
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
+
+
+class GeminiRequestError(RuntimeError):
+    """A short, safe message suitable for a student-facing screen."""
 
 
 def _gemini_modules():
@@ -28,7 +33,7 @@ def create_gemini_client(api_key: str):
 
 def _generate_with_retries(client, **request_arguments):
     """Retry temporary provider-overload errors before failing the student's request."""
-    for attempt in range(6):
+    for attempt in range(4):
         try:
             return client.models.generate_content(**request_arguments)
         except Exception as error:
@@ -38,9 +43,19 @@ def _generate_with_retries(client, **request_arguments):
                 or "UNAVAILABLE" in error_text
                 or "WinError 10013" in error_text
             )
-            if not temporary_error or attempt == 5:
-                raise
-            time.sleep(2**attempt)
+            if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+                retry_match = re.search(r"retry(?:Delay| in)[: ]+([0-9]+)", error_text, re.IGNORECASE)
+                delay = int(retry_match.group(1)) if retry_match else 60
+                raise GeminiRequestError(
+                    f"The free AI limit is busy right now. Wait about {delay} seconds, then try again with fewer pages or less text."
+                ) from error
+            if not temporary_error:
+                if "401" in error_text or "API key" in error_text:
+                    raise GeminiRequestError("The AI key is missing or invalid. Ask the site owner to check its private settings.") from error
+                raise GeminiRequestError("The AI service could not complete that request. Please try again shortly.") from error
+            if attempt == 3:
+                raise GeminiRequestError("The AI service is busy right now. Please try again in a few minutes.") from error
+            time.sleep(min(2**attempt, 8))
 
 
 def parse_questions(raw_response: str) -> list[dict[str, object]]:

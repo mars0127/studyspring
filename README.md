@@ -1,6 +1,6 @@
 # StudySpring
 
-StudySpring is a beginner-friendly study dashboard. Students can create courses, save typed notes or short PDFs, practise with quizzes, and see which topics need more review.
+StudySpring is a beginner-friendly study dashboard. Students can create courses, save typed notes or short PDFs, practise with quizzes, and see which topics need more review. It was made by Mars Sun, Kenneth Wu, and Bernard Kim.
 
 ## Version 1 goals
 
@@ -90,7 +90,7 @@ Render's free tier has limited CPU, memory, request time, and no persistent disk
 - A public deployment has no student accounts or durable database storage.
 - The optional Gemini free tier can return a quota message; wait briefly and retry with fewer pages or less text.
 - Course starters are roadmaps, not full installable course packs yet.
-- The next planned PR introduces validated, openly licensed Course Packs and a Course Library. It will not copy commercial textbooks.
+- Course Packs are still a pilot system and do not yet include every Ontario course.
 ## Milestone 1 navigation and course packs
 
 StudySpring now has top-level navigation for Home, My Courses, Course Library, Import Material, Study, Progress, and Settings. The current Streamlit implementation keeps study tools on the selected course dashboard while the application is being progressively separated into view modules; it does not use fragile global widget selectors.

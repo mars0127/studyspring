@@ -388,14 +388,24 @@ def save_pdf_import_page(
 
 
 def complete_pdf_import_job(job_id: int) -> None:
+    """Derive a truthful terminal state from every page checkpoint."""
     with get_connection() as connection:
-        unfinished = connection.execute(
-            "SELECT COUNT(*) AS count FROM pdf_import_pages WHERE job_id = ? AND status IN ('failed', 'pending', 'processing')",
-            (job_id,),
-        ).fetchone()["count"]
+        rows = connection.execute(
+            "SELECT status, COUNT(*) AS count FROM pdf_import_pages WHERE job_id = ? GROUP BY status", (job_id,)
+        ).fetchall()
+        counts = {row["status"]: int(row["count"]) for row in rows}
+        completed = counts.get("completed", 0)
+        failed = counts.get("failed", 0)
+        waiting = counts.get("pending", 0) + counts.get("processing", 0)
+        if failed and not completed:
+            final_status = "failed"
+        elif failed or waiting:
+            final_status = "partially_completed"
+        else:
+            final_status = "completed"
         connection.execute(
             "UPDATE pdf_import_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            ("partial" if unfinished else "completed", job_id),
+            (final_status, job_id),
         )
 
 

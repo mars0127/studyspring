@@ -222,6 +222,31 @@ st.title("🌱 StudySpring")
 st.subheader("Turn your notes into a clearer study plan.")
 active_page = page_navigation(["Home", "My Courses", "Course Library", "Import Material", "Study", "Progress", "Settings"])
 
+if active_page == "Course Library":
+    page_header("Course Library", "Preview and install original StudySpring course packs.")
+    try:
+        available_packs = list_course_packs()
+    except CoursePackError:
+        available_packs = []
+        status_banner("warning", "The Course Library is temporarily unavailable.")
+    if not available_packs:
+        empty_state("No packs available yet", "Validated course packs will appear here.")
+    for pack in available_packs:
+        with st.container(border=True):
+            st.subheader(f"{pack['course_code']} · {pack['title']}")
+            st.write(str(pack["description"]))
+            st.caption(f"{pack['curriculum']} · Grade {pack['grade']} · Version {pack['version']}")
+            st.write("Includes: " + ", ".join(str(unit["title"]) for unit in pack["units"]))
+            if st.button("Install course pack", key=f"library_install_{pack['id']}", width="stretch"):
+                try:
+                    installed_course_id = install_course_pack(pack, [(unit, lesson_text(pack, unit)) for unit in pack["units"]])
+                except (CoursePackError, ValueError):
+                    status_banner("error", "StudySpring could not install that course pack. Nothing was changed.")
+                else:
+                    st.session_state["selected_course_id"] = installed_course_id
+                    status_banner("success", "Course pack installed. Select My Courses to start studying.")
+    st.stop()
+
 with st.sidebar:
     st.header("🌱 StudySpring")
     st.caption("Your private study workspace")
@@ -245,14 +270,13 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.subheader("Course Library")
-    st.caption("Install an original StudySpring course pack. Your personal notes stay separate.")
+    st.caption("Browse and install prebuilt courses from Course Library in the top navigation.")
     try:
         available_packs = list_course_packs()
     except CoursePackError:
         available_packs = []
         st.warning("The Course Library is temporarily unavailable.")
-    for pack in available_packs:
+    for pack in []:  # Installation controls live only on the dedicated Course Library view.
         with st.expander(f"{pack['course_code']} · {pack['title']}"):
             st.write(str(pack["description"]))
             st.caption(f"{pack['curriculum']} · Grade {pack['grade']} · Version {pack['version']}")
@@ -277,7 +301,10 @@ if not courses:
     st.info("Create your first course in the sidebar to start building a study plan.")
     st.stop()
 
-selected_course = st.selectbox("Choose a course", courses, format_func=course_label)
+saved_course_id = st.session_state.get("selected_course_id")
+selected_index = next((index for index, course in enumerate(courses) if course["id"] == saved_course_id), 0)
+selected_course = st.selectbox("Choose a course", courses, index=selected_index, format_func=course_label)
+st.session_state["selected_course_id"] = selected_course["id"]
 
 st.markdown(f"## {selected_course['name']}")
 st.caption(f"Subject: {selected_course['subject']}")
@@ -1204,7 +1231,6 @@ st.divider()
 with st.expander("About StudySpring and your privacy"):
     st.write(
         "StudySpring stores courses, notes, flashcards, and quiz progress in a local SQLite "
-        "database on this computer. The core features do not send study material anywhere. "
-        "If you use AI question generation, StudySpring sends only the note you selected to "
-        f"Google Gemini ({DEFAULT_MODEL}) to create questions."
+        "database on YOUR computer. Our features do not send study material anywhere. "
+        "AI question generation is done through Google Gemini"
     )

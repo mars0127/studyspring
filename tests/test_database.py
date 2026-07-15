@@ -63,6 +63,14 @@ class DatabaseTests(unittest.TestCase):
         pages = database.list_pdf_import_pages(job_id)
         self.assertEqual(pages[0]["extracted_text"], "Cell notes")
         self.assertEqual(pages[1]["status"], "failed")
+        self.assertEqual(database.list_pdf_import_jobs(course_id)[0]["status"], "partially_completed")
+
+    def test_pdf_import_with_no_completed_pages_is_failed(self) -> None:
+        course_id = database.create_course("Biology", "Science", None)
+        job_id = database.create_or_resume_pdf_import_job(course_id, "hash-three", "book.pdf", 1, 1)
+        database.save_pdf_import_page(job_id, 1, "failed", error_message="Quota")
+        database.complete_pdf_import_job(job_id)
+        self.assertEqual(database.list_pdf_import_jobs(course_id)[0]["status"], "failed")
 
     def test_pdf_import_can_be_cancelled_without_losing_completed_pages(self) -> None:
         course_id = database.create_course("Physics", "Science", None)

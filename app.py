@@ -54,7 +54,8 @@ st.markdown(
       [data-testid="stSidebar"] > div:first-child {
         height: 100vh;
         overflow-y: auto;
-        padding-bottom: 3rem;
+        /* Extra room lets the full course chooser and lower sidebar controls scroll into view. */
+        padding-bottom: 24rem;
       }
       /* Keep the starter-course menu tall enough to show many choices at once. */
       [role="listbox"] {

@@ -69,6 +69,16 @@ cd studyspring
 python -m unittest discover -s tests
 ```
 
+## Development checks
+
+Install development-only tools with `python -m pip install -r requirements-dev.txt`, then run the complete verified check sequence:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check.py
+```
+
+Individual checks are Ruff (`python -m ruff check .`), formatting (`python -m ruff format --check .`), Pyright, pytest, and Course Pack validation. Install local commit checks with `pre-commit install`, then use `pre-commit run --all-files`. Browser tests are deferred; Sentry, analytics, and local OCR are optional and not configured by default.
+
 The next build step is creating the first working Streamlit screen.
 
 ## Privacy and sharing

@@ -1,0 +1,9 @@
+name: Product regression
+description: Report behavior that previously worked better
+body:
+  - type: textarea
+    attributes: {label: Previous and current behavior}
+  - type: textarea
+    attributes: {label: Student impact and reproduction steps}
+  - type: textarea
+    attributes: {label: Environment, expected restoration, acceptance criteria, screenshots, privacy concerns}

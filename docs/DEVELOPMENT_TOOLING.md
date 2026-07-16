@@ -27,3 +27,5 @@
 ```
 
 Sentry, PostHog, and local OCR stay opt-in. They must never receive note text, textbook text, answers, API keys, or private filenames.
+
+Pyright starts by checking developer scripts only. The Streamlit application has existing dynamic data and third-party stub issues; expanding type coverage is a separate, incremental maintenance task rather than a mass rewrite in the tooling PR.

@@ -119,6 +119,14 @@ class DatabaseTests(unittest.TestCase):
             database.record_quiz_attempt(question["id"], "A" if correct else "B", correct)
         self.assertEqual(database.course_topic_stats(course_id)[0]["topic"], "Transformations")
 
+    def test_textbook_batches_stay_in_one_visible_note(self) -> None:
+        course_id = database.create_course("Functions", "Mathematics", None)
+        database.save_imported_textbook_batch(course_id, 9, "Functions textbook", "First pages")
+        database.save_imported_textbook_batch(course_id, 9, "Functions textbook", "Later pages")
+        notes = database.list_study_notes(course_id)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Later pages", notes[0]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

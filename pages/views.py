@@ -14,7 +14,7 @@ from database import (
     cancel_pdf_import_job, course_attempt_history, course_quiz_stats, course_topic_stats,
     create_course, create_study_note, delete_course, install_course_pack, list_courses,
     list_flashcards, list_pdf_import_jobs, list_pdf_import_pages, list_quiz_questions,
-    list_recent_quiz_sessions, list_study_notes, record_quiz_attempt, save_generated_material,
+    list_recent_quiz_sessions, list_study_notes, record_quiz_attempt, save_generated_material, save_imported_textbook_batch,
 )
 from gemini_client import GeminiRequestError, generate_study_material
 from services.course_pack_service import CoursePackError, lesson_text, list_course_packs
@@ -169,6 +169,8 @@ def render_imports() -> None:
                     if mode == "Entire textbook":
                         job_id, _ = start_textbook_import(course_id=int(course["id"]), filename=textbook.name, pdf_bytes=textbook_data)
                         texts, failed, finished = process_next_textbook_batch(job_id=job_id, pdf_bytes=textbook_data, api_key=_gemini_key(), progress=update)
+                        if texts:
+                            save_imported_textbook_batch(int(course["id"]), job_id, textbook.name.removesuffix(".pdf"), "\n\n".join(texts))
                         if not finished:
                             status_banner("info", "The first safe batch is saved. Re-upload the same PDF later to resume; completed pages will be skipped.")
                     else:
@@ -176,7 +178,7 @@ def render_imports() -> None:
                             course_id=int(course["id"]), filename=textbook.name, pdf_bytes=textbook_data,
                             first_page=int(first_page), last_page=int(last_page), api_key=_gemini_key(), progress=update,
                         )
-                    if texts:
+                    if texts and mode != "Entire textbook":
                         st.session_state["import_preview"] = {"title": textbook.name.removesuffix(".pdf"), "content": "\n\n".join(texts)}
                     if failed:
                         status_banner("warning", f"Saved the pages that could be read. Page(s) {', '.join(map(str, failed))} can be retried from the processing queue.")

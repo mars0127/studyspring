@@ -126,6 +126,7 @@ def initialize_database() -> None:
                 chapter TEXT NOT NULL DEFAULT '',
                 lesson TEXT NOT NULL DEFAULT '',
                 source_group TEXT NOT NULL DEFAULT 'lesson',
+                import_job_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (course_id) REFERENCES courses(id)
             )
@@ -145,6 +146,8 @@ def initialize_database() -> None:
             connection.execute(
                 "ALTER TABLE study_notes ADD COLUMN source_group TEXT NOT NULL DEFAULT 'lesson'"
             )
+        if "import_job_id" not in note_columns:
+            connection.execute("ALTER TABLE study_notes ADD COLUMN import_job_id INTEGER")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS flashcards (
@@ -455,6 +458,27 @@ def create_study_note(
             "INSERT INTO study_notes (course_id, title, content, unit, lesson, chapter, source_group) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (course_id, clean_title, clean_content, unit.strip(), lesson.strip(), chapter.strip(), source_group),
         )
+
+
+def save_imported_textbook_batch(course_id: int, job_id: int, title: str, text: str) -> None:
+    """Keep one visible textbook note while internal page checkpoints remain separate."""
+    clean_text = text.strip()
+    if not clean_text:
+        return
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id, content FROM study_notes WHERE course_id = ? AND import_job_id = ?",
+            (course_id, job_id),
+        ).fetchone()
+        if existing:
+            if clean_text not in existing["content"]:
+                connection.execute("UPDATE study_notes SET content = content || ? WHERE id = ?", ("\n\n" + clean_text, existing["id"]))
+        else:
+            connection.execute(
+                """INSERT INTO study_notes (course_id, title, content, source_group, import_job_id)
+                   VALUES (?, ?, ?, 'imported_textbook', ?)""",
+                (course_id, title.strip() or "Imported textbook", clean_text, job_id),
+            )
 
 
 def list_study_notes(course_id: int) -> list[sqlite3.Row]:

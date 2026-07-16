@@ -1,0 +1,24 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: python -m compileall -q app.py database.py components pages services
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pyright
+      - run: pytest
+      - run: python tools/course_pack.py validate course_packs/ontario/mhf4u/manifest.json

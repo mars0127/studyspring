@@ -12,6 +12,10 @@ from services.pdf_service import (
     validate_page_range,
     validate_pdf_upload,
 )
+import database
+from pathlib import Path
+import tempfile
+from services.textbook_import_service import start_textbook_import
 
 
 def blank_pdf(page_count: int = 1) -> bytes:
@@ -24,6 +28,16 @@ def blank_pdf(page_count: int = 1) -> bytes:
 
 
 class PdfServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.original_path = database.DATABASE_PATH
+        database.DATABASE_PATH = Path(self.temporary_directory.name) / "test.db"
+        database.initialize_database()
+
+    def tearDown(self) -> None:
+        database.DATABASE_PATH = self.original_path
+        self.temporary_directory.cleanup()
+
     def test_invalid_extension_and_damaged_input_are_rejected(self) -> None:
         with self.assertRaises(PdfImportError):
             validate_pdf_upload("notes.txt", b"%PDF-1.4", 30)
@@ -51,6 +65,12 @@ class PdfServiceTests(unittest.TestCase):
             validate_page_range(1, MAX_PROCESSING_PAGES + 1, MAX_PROCESSING_PAGES + 1)
         with self.assertRaises(PdfImportError):
             validate_page_range(4, 3, 10)
+
+    def test_entire_textbook_creates_one_checkpoint_job(self) -> None:
+        course_id = database.create_course("Functions", "Math", None)
+        job_id, pages = start_textbook_import(course_id=course_id, filename="book.pdf", pdf_bytes=blank_pdf(22))
+        self.assertEqual(pages, 22)
+        self.assertEqual(len(database.list_pdf_import_pages(job_id)), 22)
 
 
 if __name__ == "__main__":

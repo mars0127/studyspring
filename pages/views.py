@@ -20,7 +20,7 @@ from gemini_client import GeminiRequestError, generate_study_material
 from services.course_pack_service import CoursePackError, lesson_text, list_course_packs
 from services.pdf_service import STANDARD_PDF_MAX_MB, PdfImportError, extract_embedded_text, inspect_pdf, validate_pdf_upload
 from services.pdf_service import TEXTBOOK_PDF_MAX_MB
-from services.textbook_import_service import process_textbook_range
+from services.textbook_import_service import process_next_textbook_batch, process_textbook_range, start_textbook_import
 
 
 def _gemini_key() -> str | None:
@@ -144,7 +144,7 @@ def render_imports() -> None:
             except (PdfImportError, ValueError) as error: st.error(str(error))
     with st.container(border=True):
         st.subheader("Import your own material")
-        st.caption("For a textbook or scanned handout, select up to 20 pages. Pages with normal PDF text stay local; only unreadable scans use the optional private AI reader when it is configured.")
+        st.caption("Upload a textbook once, then choose the whole book or a smaller section. StudySpring handles safe page batches internally.")
         textbook = st.file_uploader(
             f"Choose a textbook PDF (up to {TEXTBOOK_PDF_MAX_MB} MB)", type=["pdf"], key="shell_textbook_pdf"
         )
@@ -153,17 +153,26 @@ def render_imports() -> None:
                 textbook_data = textbook.getvalue()
                 details = inspect_pdf(textbook.name, textbook_data, TEXTBOOK_PDF_MAX_MB)
                 st.caption(f"{details.page_count} pages · {details.file_size_bytes / 1024 / 1024:.1f} MB · {details.document_kind} ({details.readable_text_percentage}% readable sample)")
+                mode = st.radio("What would you like to import?", ["Entire textbook", "Selected pages"], horizontal=True, key="shell_textbook_mode")
                 first, last = st.columns(2)
                 first_page = first.number_input("First page", min_value=1, max_value=details.page_count, value=1, key="shell_textbook_first")
                 last_page = last.number_input("Last page", min_value=1, max_value=details.page_count, value=min(details.page_count, 20), key="shell_textbook_last")
-                if st.button("Read selected pages", type="primary", key="shell_process_textbook"):
+                if mode == "Entire textbook":
+                    first_page, last_page = 1, details.page_count
+                if st.button("Start import", type="primary", key="shell_process_textbook"):
                     progress = st.progress(0, text="Preparing selected pages…")
                     def update(done: int, total: int, message: str) -> None:
                         progress.progress(done / total if total else 0, text=message)
-                    texts, failed = process_textbook_range(
-                        course_id=int(course["id"]), filename=textbook.name, pdf_bytes=textbook_data,
-                        first_page=int(first_page), last_page=int(last_page), api_key=_gemini_key(), progress=update,
-                    )
+                    if mode == "Entire textbook":
+                        job_id, _ = start_textbook_import(course_id=int(course["id"]), filename=textbook.name, pdf_bytes=textbook_data)
+                        texts, failed, finished = process_next_textbook_batch(job_id=job_id, pdf_bytes=textbook_data, api_key=_gemini_key(), progress=update)
+                        if not finished:
+                            status_banner("info", "The first safe batch is saved. Re-upload the same PDF later to resume; completed pages will be skipped.")
+                    else:
+                        texts, failed = process_textbook_range(
+                            course_id=int(course["id"]), filename=textbook.name, pdf_bytes=textbook_data,
+                            first_page=int(first_page), last_page=int(last_page), api_key=_gemini_key(), progress=update,
+                        )
                     if texts:
                         st.session_state["import_preview"] = {"title": textbook.name.removesuffix(".pdf"), "content": "\n\n".join(texts)}
                     if failed:

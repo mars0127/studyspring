@@ -1,0 +1,13 @@
+name: Bug report
+description: Report a student-facing problem
+body:
+  - type: textarea
+    attributes: {label: Student problem, description: What was the student trying to do?}
+  - type: textarea
+    attributes: {label: Steps and current behavior}
+  - type: textarea
+    attributes: {label: Expected behavior}
+  - type: textarea
+    attributes: {label: Environment, description: Device, browser, preview/live, screenshots}
+  - type: textarea
+    attributes: {label: Privacy and rollback concerns}

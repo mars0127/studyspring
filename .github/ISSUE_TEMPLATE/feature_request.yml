@@ -1,0 +1,7 @@
+name: Feature request
+description: Propose a student-facing improvement
+body:
+  - type: textarea
+    attributes: {label: Student problem and expected outcome}
+  - type: textarea
+    attributes: {label: Acceptance criteria and privacy concerns}

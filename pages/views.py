@@ -129,7 +129,7 @@ def render_imports() -> None:
         with st.form("shell_paste_notes", clear_on_submit=True):
             title = st.text_input("Title"); content = st.text_area("Notes", height=180); save = st.form_submit_button("Save notes")
         if save:
-            try: create_study_note(course["id"], title, content)
+            try: create_study_note(course["id"], title, content, source_group="personal_note")
             except ValueError as error: st.error(str(error))
             else: st.success("Notes saved."); st.rerun()
     with st.container(border=True):
@@ -154,11 +154,14 @@ def render_imports() -> None:
                 details = inspect_pdf(textbook.name, textbook_data, TEXTBOOK_PDF_MAX_MB)
                 st.caption(f"{details.page_count} pages · {details.file_size_bytes / 1024 / 1024:.1f} MB · {details.document_kind} ({details.readable_text_percentage}% readable sample)")
                 mode = st.radio("What would you like to import?", ["Entire textbook", "Selected pages"], horizontal=True, key="shell_textbook_mode")
-                first, last = st.columns(2)
-                first_page = first.number_input("First page", min_value=1, max_value=details.page_count, value=1, key="shell_textbook_first")
-                last_page = last.number_input("Last page", min_value=1, max_value=details.page_count, value=min(details.page_count, 20), key="shell_textbook_last")
                 if mode == "Entire textbook":
                     first_page, last_page = 1, details.page_count
+                    st.caption(f"All {details.page_count} pages will be added to one import job.")
+                else:
+                    first, last = st.columns(2)
+                    first_page = first.number_input("First page", min_value=1, max_value=details.page_count, value=1, key="shell_textbook_first")
+                    last_page = last.number_input("Last page", min_value=1, max_value=details.page_count, value=min(details.page_count, 20), key="shell_textbook_last")
+                    st.caption(f"Selected range: {int(last_page) - int(first_page) + 1} page(s).")
                 if st.button("Start import", type="primary", key="shell_process_textbook"):
                     progress = st.progress(0, text="Preparing selected pages…")
                     def update(done: int, total: int, message: str) -> None:
@@ -186,9 +189,14 @@ def render_imports() -> None:
         with st.form("shell_import_preview"):
             title = st.text_input("Review title", value=preview["title"]); text = st.text_area("Review extracted text", value=preview["content"], height=240); save = st.form_submit_button("Save reviewed material")
         if save:
-            try: create_study_note(course["id"], title, text)
+            try: create_study_note(course["id"], title, text, source_group="imported_material")
             except ValueError as error: st.error(str(error))
-            else: del st.session_state["import_preview"]; st.success("Material saved."); st.rerun()
+            else:
+                del st.session_state["import_preview"]
+                st.session_state["active_page"] = "Learn"
+                st.session_state["primary_navigation"] = "Learn"
+                st.success("Material saved. Open Learn to create flashcards and practice.")
+                st.rerun()
     st.subheader("Processing queue")
     jobs = list_pdf_import_jobs(course["id"])
     if not jobs: st.caption("No textbook jobs for this course yet.")
@@ -231,6 +239,10 @@ def render_learn() -> None:
         for card in cards: st.markdown(f"**{card['front']}**\n\n{card['back']}")
     with tabs[2]:
         questions = [question for question in list_quiz_questions(course["id"]) if question["question_type"] == "multiple_choice"]
+        target_topic = st.session_state.get("target_review_topic")
+        if target_topic:
+            questions = [question for question in questions if question["topic"] == target_topic]
+            st.info(f"Targeted review: {target_topic}")
         if not questions: empty_state("No practice questions yet", "Install a pack or add questions from your notes.")
         for question in questions:
             answer = st.radio(question["question"], question["options"], index=None, key=f"shell_question_{question['id']}")
@@ -245,9 +257,23 @@ def render_progress() -> None:
     if not course: empty_state("Choose a course first", "Progress appears after you start studying."); return
     attempts, score = course_quiz_stats(course["id"]); cards = list_flashcards(course["id"]); notes = list_study_notes(course["id"])
     cols = st.columns(3); cols[0].metric("Answers", attempts); cols[1].metric("Accuracy", "—" if score is None else f"{score:.0f}%"); cols[2].metric("Flashcards", len(cards))
-    st.subheader("Topic mastery")
+    st.subheader("Focus on weak topics")
     topics = course_topic_stats(course["id"])
-    if topics: st.dataframe(topics, width="stretch", hide_index=True)
+    if topics:
+        weak_topics = [item for item in topics if item["accuracy"] < 70]
+        if weak_topics:
+            for item in weak_topics:
+                with st.container(border=True):
+                    st.write(f"**{item['topic']}** — {item['accuracy']}% across {item['attempts']} answer(s)")
+                    if st.button("Start targeted practice", key=f"target_{item['topic']}"):
+                        st.session_state["target_review_topic"] = item["topic"]
+                        st.session_state["active_page"] = "Learn"
+                        st.session_state["primary_navigation"] = "Learn"
+                        st.rerun()
+        else:
+            st.success("No weak topics right now — keep practising to maintain your progress.")
+        st.subheader("Topic mastery")
+        st.dataframe(topics, width="stretch", hide_index=True)
     else: st.caption("Complete a practice question to start tracking mastery.")
     st.subheader("Recent quizzes")
     sessions = list_recent_quiz_sessions(course["id"])

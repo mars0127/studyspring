@@ -111,6 +111,14 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             database.save_generated_material(course_id, note_id, material)
 
+    def test_low_accuracy_topic_is_ranked_before_stronger_topic(self) -> None:
+        course_id = database.create_course("Math", "Mathematics", None)
+        for topic, correct in [("Transformations", False), ("Transformations", False), ("Functions", True)]:
+            database.create_quiz_question(course_id, topic, f"{topic}?", ["A", "B", "C", "D"], "A")
+            question = database.list_quiz_questions(course_id)[0]
+            database.record_quiz_attempt(question["id"], "A" if correct else "B", correct)
+        self.assertEqual(database.course_topic_stats(course_id)[0]["topic"], "Transformations")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -53,6 +53,80 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(database.list_courses(), [])
         self.assertEqual(database.list_study_notes(course["id"]), [])
 
+    def test_pdf_import_pages_are_checkpointed(self) -> None:
+        course_id = database.create_course("Biology", "Science", None)
+        job_id = database.create_or_resume_pdf_import_job(course_id, "hash", "book.pdf", 1, 2)
+        self.assertEqual(job_id, database.create_or_resume_pdf_import_job(course_id, "hash", "book.pdf", 1, 2))
+        database.save_pdf_import_page(job_id, 1, "completed", "embedded_text", "Cell notes")
+        database.save_pdf_import_page(job_id, 2, "failed", error_message="Unreadable")
+        database.complete_pdf_import_job(job_id)
+        pages = database.list_pdf_import_pages(job_id)
+        self.assertEqual(pages[0]["extracted_text"], "Cell notes")
+        self.assertEqual(pages[1]["status"], "failed")
+        self.assertEqual(database.list_pdf_import_jobs(course_id)[0]["status"], "partially_completed")
+
+    def test_pdf_import_with_no_completed_pages_is_failed(self) -> None:
+        course_id = database.create_course("Biology", "Science", None)
+        job_id = database.create_or_resume_pdf_import_job(course_id, "hash-three", "book.pdf", 1, 1)
+        database.save_pdf_import_page(job_id, 1, "failed", error_message="Quota")
+        database.complete_pdf_import_job(job_id)
+        self.assertEqual(database.list_pdf_import_jobs(course_id)[0]["status"], "failed")
+
+    def test_pdf_import_can_be_cancelled_without_losing_completed_pages(self) -> None:
+        course_id = database.create_course("Physics", "Science", None)
+        job_id = database.create_or_resume_pdf_import_job(course_id, "hash-two", "book.pdf", 1, 2)
+        database.save_pdf_import_page(job_id, 1, "completed", "embedded_text", "Saved page")
+        database.cancel_pdf_import_job(job_id)
+        pages = database.list_pdf_import_pages(job_id)
+        self.assertEqual(pages[0]["status"], "completed")
+        self.assertEqual(pages[1]["status"], "skipped")
+        self.assertEqual(database.list_pdf_import_jobs(course_id)[0]["status"], "cancelled")
+
+    def test_imported_lesson_persists_after_course_reload(self) -> None:
+        course_id = database.create_course("Advanced Functions", "Mathematics", None)
+        database.create_study_note(course_id, "Imported transformations", "A saved explanation.")
+        reloaded_course = next(course for course in database.list_courses() if course["id"] == course_id)
+        notes = database.list_study_notes(reloaded_course["id"])
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["title"], "Imported transformations")
+
+    def test_installed_course_keeps_pack_identity_after_reload(self) -> None:
+        pack = {"id": "ontario-mhf4u-v1", "title": "Advanced Functions", "subject": "Mathematics", "version": "1.0"}
+        course_id = database.install_course_pack(pack, [])
+        reloaded = next(course for course in database.list_courses() if course["id"] == course_id)
+        self.assertEqual(reloaded["course_pack_id"], "ontario-mhf4u-v1")
+        self.assertEqual(reloaded["course_pack_version"], "1.0")
+
+    def test_generated_material_is_saved_once_with_its_source_note(self) -> None:
+        course_id = database.create_course("Biology", "Science", None)
+        database.create_study_note(course_id, "Cells", "Cells divide.")
+        note_id = database.list_study_notes(course_id)[0]["id"]
+        material = {
+            "flashcards": [{"front": "Mitosis", "back": "Cell division"}],
+            "questions": [{"topic": "Cells", "question": "What divides?", "options": ["Cells", "Rocks", "Clouds", "Stars"], "correct_answer": "Cells", "explanation": "The note states cells divide."}],
+        }
+        database.save_generated_material(course_id, note_id, material)
+        self.assertEqual(len(database.list_flashcards(course_id)), 1)
+        self.assertEqual(len(database.list_quiz_questions(course_id)), 1)
+        with self.assertRaises(ValueError):
+            database.save_generated_material(course_id, note_id, material)
+
+    def test_low_accuracy_topic_is_ranked_before_stronger_topic(self) -> None:
+        course_id = database.create_course("Math", "Mathematics", None)
+        for topic, correct in [("Transformations", False), ("Transformations", False), ("Functions", True)]:
+            database.create_quiz_question(course_id, topic, f"{topic}?", ["A", "B", "C", "D"], "A")
+            question = database.list_quiz_questions(course_id)[0]
+            database.record_quiz_attempt(question["id"], "A" if correct else "B", correct)
+        self.assertEqual(database.course_topic_stats(course_id)[0]["topic"], "Transformations")
+
+    def test_textbook_batches_stay_in_one_visible_note(self) -> None:
+        course_id = database.create_course("Functions", "Mathematics", None)
+        database.save_imported_textbook_batch(course_id, 9, "Functions textbook", "First pages")
+        database.save_imported_textbook_batch(course_id, 9, "Functions textbook", "Later pages")
+        notes = database.list_study_notes(course_id)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Later pages", notes[0]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,6 +34,8 @@ def initialize_database() -> None:
                 subject TEXT NOT NULL,
                 exam_date TEXT,
                 is_preinstalled INTEGER NOT NULL DEFAULT 0,
+                course_pack_id TEXT NOT NULL DEFAULT '',
+                course_pack_version TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -45,6 +47,10 @@ def initialize_database() -> None:
             connection.execute(
                 "ALTER TABLE courses ADD COLUMN is_preinstalled INTEGER NOT NULL DEFAULT 0"
             )
+        if "course_pack_id" not in course_columns:
+            connection.execute("ALTER TABLE courses ADD COLUMN course_pack_id TEXT NOT NULL DEFAULT ''")
+        if "course_pack_version" not in course_columns:
+            connection.execute("ALTER TABLE courses ADD COLUMN course_pack_version TEXT NOT NULL DEFAULT ''")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -59,6 +65,7 @@ def initialize_database() -> None:
                 achievement_category TEXT NOT NULL DEFAULT 'Knowledge & Understanding',
                 marks INTEGER NOT NULL DEFAULT 1,
                 sample_answer TEXT NOT NULL DEFAULT '',
+                source_note_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (course_id) REFERENCES courses(id)
             )
@@ -81,6 +88,8 @@ def initialize_database() -> None:
             connection.execute("ALTER TABLE quiz_questions ADD COLUMN marks INTEGER NOT NULL DEFAULT 1")
         if "sample_answer" not in question_columns:
             connection.execute("ALTER TABLE quiz_questions ADD COLUMN sample_answer TEXT NOT NULL DEFAULT ''")
+        if "source_note_id" not in question_columns:
+            connection.execute("ALTER TABLE quiz_questions ADD COLUMN source_note_id INTEGER")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS quiz_attempts (
@@ -117,6 +126,7 @@ def initialize_database() -> None:
                 chapter TEXT NOT NULL DEFAULT '',
                 lesson TEXT NOT NULL DEFAULT '',
                 source_group TEXT NOT NULL DEFAULT 'lesson',
+                import_job_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (course_id) REFERENCES courses(id)
             )
@@ -136,6 +146,8 @@ def initialize_database() -> None:
             connection.execute(
                 "ALTER TABLE study_notes ADD COLUMN source_group TEXT NOT NULL DEFAULT 'lesson'"
             )
+        if "import_job_id" not in note_columns:
+            connection.execute("ALTER TABLE study_notes ADD COLUMN import_job_id INTEGER")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS flashcards (
@@ -143,8 +155,45 @@ def initialize_database() -> None:
                 course_id INTEGER NOT NULL,
                 front TEXT NOT NULL,
                 back TEXT NOT NULL,
+                source_note_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (course_id) REFERENCES courses(id)
+            )
+            """
+        )
+        flashcard_columns = {row["name"] for row in connection.execute("PRAGMA table_info(flashcards)").fetchall()}
+        if "source_note_id" not in flashcard_columns:
+            connection.execute("ALTER TABLE flashcards ADD COLUMN source_note_id INTEGER")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_import_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course_id INTEGER NOT NULL,
+                document_hash TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                first_page INTEGER NOT NULL,
+                last_page INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(course_id, document_hash, first_page, last_page),
+                FOREIGN KEY (course_id) REFERENCES courses(id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_import_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                extraction_method TEXT NOT NULL DEFAULT '',
+                extracted_text TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(job_id, page_number),
+                FOREIGN KEY (job_id) REFERENCES pdf_import_jobs(id)
             )
             """
         )
@@ -203,7 +252,51 @@ def create_course(
             "INSERT INTO courses (name, subject, exam_date, is_preinstalled) VALUES (?, ?, ?, ?)",
             (clean_name, clean_subject, exam_date, int(is_preinstalled)),
         )
-        return int(cursor.lastrowid)
+    return int(cursor.lastrowid)
+
+
+def install_course_pack(pack: dict[str, object], lessons: list[tuple[dict[str, object], str]]) -> int:
+    """Install one validated pack atomically, without duplicating a prior install."""
+    pack_id = str(pack["id"])
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id FROM courses WHERE course_pack_id = ?", (pack_id,)
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cursor = connection.execute(
+            """INSERT INTO courses (name, subject, exam_date, is_preinstalled, course_pack_id, course_pack_version)
+               VALUES (?, ?, NULL, 1, ?, ?)""",
+            (str(pack["title"]), str(pack["subject"]), pack_id, str(pack["version"])),
+        )
+        course_id = int(cursor.lastrowid)
+        for unit, content in lessons:
+            connection.execute(
+                """INSERT INTO study_notes (course_id, title, content, unit, chapter, lesson, source_group)
+                   VALUES (?, ?, ?, ?, '', ?, 'lesson')""",
+                (course_id, str(unit["title"]), content, str(unit["title"]), "Course pack lesson"),
+            )
+            for block in unit.get("blocks", []):
+                if block.get("type") == "flashcard_set":
+                    connection.executemany(
+                        "INSERT INTO flashcards (course_id, front, back) VALUES (?, ?, ?)",
+                        [(course_id, card["front"], card["back"]) for card in block["cards"]],
+                    )
+                elif block.get("type") == "multiple_choice_set":
+                    for question in block["questions"]:
+                        connection.execute(
+                            """INSERT INTO quiz_questions (course_id, topic, question, options_json, correct_answer, explanation)
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (course_id, question["topic"], question["question"], json.dumps(question["options"]), question["correct_answer"], question.get("explanation", "")),
+                        )
+                elif block.get("type") == "short_answer_set":
+                    for question in block["questions"]:
+                        connection.execute(
+                            """INSERT INTO quiz_questions (course_id, topic, question, options_json, correct_answer, question_type, sample_answer)
+                               VALUES (?, ?, ?, '[]', ?, 'short_answer', ?)""",
+                            (course_id, question["topic"], question["question"], question["sample_answer"], question["sample_answer"]),
+                        )
+        return course_id
 
 
 def update_course(course_id: int, name: str, subject: str, exam_date: str | None) -> None:
@@ -245,8 +338,109 @@ def list_courses() -> list[sqlite3.Row]:
     """Return courses in the order the student created them."""
     with get_connection() as connection:
         return connection.execute(
-            "SELECT id, name, subject, exam_date, is_preinstalled FROM courses ORDER BY id DESC"
+            """SELECT id, name, subject, exam_date, is_preinstalled,
+                      course_pack_id, course_pack_version
+               FROM courses ORDER BY id DESC"""
         ).fetchall()
+
+
+def create_or_resume_pdf_import_job(
+    course_id: int, document_hash: str, filename: str, first_page: int, last_page: int
+) -> int:
+    """Create a checkpointed import job, or resume an identical incomplete job."""
+    with get_connection() as connection:
+        existing = connection.execute(
+            """SELECT id FROM pdf_import_jobs
+               WHERE course_id = ? AND document_hash = ? AND first_page = ? AND last_page = ?""",
+            (course_id, document_hash, first_page, last_page),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cursor = connection.execute(
+            """INSERT INTO pdf_import_jobs (course_id, document_hash, filename, first_page, last_page)
+               VALUES (?, ?, ?, ?, ?)""",
+            (course_id, document_hash, filename, first_page, last_page),
+        )
+        job_id = int(cursor.lastrowid)
+        connection.executemany(
+            "INSERT INTO pdf_import_pages (job_id, page_number) VALUES (?, ?)",
+            [(job_id, page_number) for page_number in range(first_page, last_page + 1)],
+        )
+        return job_id
+
+
+def list_pdf_import_pages(job_id: int) -> list[dict[str, object]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT page_number, status, extraction_method, extracted_text, error_message
+               FROM pdf_import_pages WHERE job_id = ? ORDER BY page_number""",
+            (job_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_pdf_import_page(
+    job_id: int, page_number: int, status: str, extraction_method: str = "", text: str = "", error_message: str = ""
+) -> None:
+    """Persist each page immediately so an interrupted import remains recoverable."""
+    if status not in {"pending", "processing", "completed", "failed", "skipped"}:
+        raise ValueError("Unsupported PDF import status.")
+    with get_connection() as connection:
+        connection.execute(
+            """UPDATE pdf_import_pages
+               SET status = ?, extraction_method = ?, extracted_text = ?, error_message = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE job_id = ? AND page_number = ?""",
+            (status, extraction_method, text, error_message[:500], job_id, page_number),
+        )
+        connection.execute(
+            """UPDATE pdf_import_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+            (status, job_id),
+        )
+
+
+def complete_pdf_import_job(job_id: int) -> None:
+    """Derive a truthful terminal state from every page checkpoint."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT status, COUNT(*) AS count FROM pdf_import_pages WHERE job_id = ? GROUP BY status", (job_id,)
+        ).fetchall()
+        counts = {row["status"]: int(row["count"]) for row in rows}
+        completed = counts.get("completed", 0)
+        failed = counts.get("failed", 0)
+        waiting = counts.get("pending", 0) + counts.get("processing", 0)
+        if failed and not completed:
+            final_status = "failed"
+        elif failed or waiting:
+            final_status = "partially_completed"
+        else:
+            final_status = "completed"
+        connection.execute(
+            "UPDATE pdf_import_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (final_status, job_id),
+        )
+
+
+def list_pdf_import_jobs(course_id: int) -> list[dict[str, object]]:
+    """List a course's recoverable textbook imports, newest first."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT id, filename, first_page, last_page, status, updated_at
+               FROM pdf_import_jobs WHERE course_id = ? ORDER BY id DESC""", (course_id,)
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def cancel_pdf_import_job(job_id: int) -> None:
+    """Stop an import without discarding completed page checkpoints."""
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE pdf_import_pages SET status = 'skipped', updated_at = CURRENT_TIMESTAMP WHERE job_id = ? AND status IN ('pending', 'processing')",
+            (job_id,),
+        )
+        connection.execute(
+            "UPDATE pdf_import_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (job_id,)
+        )
 
 
 def create_study_note(
@@ -264,6 +458,27 @@ def create_study_note(
             "INSERT INTO study_notes (course_id, title, content, unit, lesson, chapter, source_group) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (course_id, clean_title, clean_content, unit.strip(), lesson.strip(), chapter.strip(), source_group),
         )
+
+
+def save_imported_textbook_batch(course_id: int, job_id: int, title: str, text: str) -> None:
+    """Keep one visible textbook note while internal page checkpoints remain separate."""
+    clean_text = text.strip()
+    if not clean_text:
+        return
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id, content FROM study_notes WHERE course_id = ? AND import_job_id = ?",
+            (course_id, job_id),
+        ).fetchone()
+        if existing:
+            if clean_text not in existing["content"]:
+                connection.execute("UPDATE study_notes SET content = content || ? WHERE id = ?", ("\n\n" + clean_text, existing["id"]))
+        else:
+            connection.execute(
+                """INSERT INTO study_notes (course_id, title, content, source_group, import_job_id)
+                   VALUES (?, ?, ?, 'imported_textbook', ?)""",
+                (course_id, title.strip() or "Imported textbook", clean_text, job_id),
+            )
 
 
 def list_study_notes(course_id: int) -> list[sqlite3.Row]:
@@ -493,3 +708,27 @@ def list_flashcards(course_id: int) -> list[dict[str, object]]:
             (course_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def save_generated_material(course_id: int, source_note_id: int, material: dict[str, object]) -> None:
+    """Persist one explicit note-generation result once, linked to its source note."""
+    cards = material.get("flashcards", [])
+    questions = material.get("questions", [])
+    with get_connection() as connection:
+        already_saved = connection.execute(
+            "SELECT 1 FROM flashcards WHERE source_note_id = ? UNION SELECT 1 FROM quiz_questions WHERE source_note_id = ?",
+            (source_note_id, source_note_id),
+        ).fetchone()
+        if already_saved:
+            raise ValueError("Study material has already been generated from this note.")
+        connection.executemany(
+            "INSERT INTO flashcards (course_id, front, back, source_note_id) VALUES (?, ?, ?, ?)",
+            [(course_id, str(card["front"]), str(card["back"]), source_note_id) for card in cards],
+        )
+        for question in questions:
+            connection.execute(
+                """INSERT INTO quiz_questions (course_id, topic, question, options_json, correct_answer, explanation, source_note_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (course_id, str(question["topic"]), str(question["question"]), json.dumps(question["options"]),
+                 str(question["correct_answer"]), str(question.get("explanation", "")), source_note_id),
+            )

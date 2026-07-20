@@ -5,3 +5,4 @@ __pycache__/
 .env
 .streamlit/secrets.toml
 streamlit-*.log
+.pre-commit-cache/

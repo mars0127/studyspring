@@ -36,14 +36,15 @@ from gemini_client import (
     DEFAULT_MODEL,
     create_gemini_client,
     extract_text_from_image,
-    extract_text_from_images,
     grade_short_answer,
     generate_questions,
 )
 from course_starters import COURSE_STARTERS
+from pdf_import import iter_pdf_pages, pdf_page_count, split_textbook_sections
 
 
 MAX_SELECTED_SCANNED_PDF_PAGES = 100
+MAX_AI_SOURCE_CHARACTERS = 75_000
 
 
 st.set_page_config(page_title="StudySpring", page_icon="🌱", layout="wide")
@@ -88,54 +89,56 @@ def extract_pdf_text(file_bytes: bytes) -> str:
     return "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
 
 
-def render_scanned_pdf_pages(file_bytes: bytes, first_page: int, last_page: int) -> list[bytes]:
-    """Render a few selected PDF pages to PNG images for AI transcription."""
-    try:
-        import fitz
-    except ImportError as error:
-        raise RuntimeError("Scanned-PDF support is not installed. Run: pip install -r requirements.txt") from error
+def read_pdf_pages_for_import(
+    file_bytes: bytes,
+    first_page: int,
+    last_page: int,
+    api_key: str | None,
+    progress,
+) -> list[tuple[int, str]]:
+    """Read a PDF incrementally; Gemini sees one unreadable page, never a book."""
+    total_pages = last_page - first_page + 1
+    extracted: list[tuple[int, str]] = []
+    client = None
+    for completed, page in enumerate(iter_pdf_pages(file_bytes, first_page, last_page), start=1):
+        progress.progress(
+            (completed - 1) / total_pages,
+            text=f"Reading page {page.number} of {last_page}...",
+        )
+        if page.image_bytes is None:
+            extracted.append((page.number, page.text))
+            continue
+        if not api_key:
+            raise ValueError(
+                f"Page {page.number} is a scan and needs Gemini OCR. Add GEMINI_API_KEY, then try again."
+            )
+        client = client or create_gemini_client(api_key)
+        try:
+            text = extract_text_from_image(api_key, page.image_bytes, "image/png", client=client)
+        except Exception as error:
+            raise RuntimeError(f"Page {page.number} could not be read: {error}") from error
+        extracted.append((page.number, text))
+    progress.progress(1.0, text="Organizing extracted text...")
+    return extracted
 
-    document = fitz.open(stream=file_bytes, filetype="pdf")
-    try:
-        if last_page > len(document):
-            raise ValueError(f"This PDF has {len(document)} page(s). Choose a smaller ending page.")
-        page_images = []
-        for page_number in range(first_page - 1, last_page):
-            page = document.load_page(page_number)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-            page_images.append(pixmap.tobytes("png"))
-        return page_images
-    finally:
-        document.close()
 
-
-def scanned_pdf_page_count(file_bytes: bytes) -> int:
-    """Count PDF pages without attempting text extraction."""
-    import fitz
-
-    document = fitz.open(stream=file_bytes, filetype="pdf")
-    try:
-        return len(document)
-    finally:
-        document.close()
-
-
-def transcribe_scanned_page_batch(
-    api_key: str, image_batch: list[bytes], first_page: int, client=None
-) -> str:
-    """Read a batch, retrying one page at a time when a combined request is empty."""
-    try:
-        return extract_text_from_images(api_key, image_batch, client=client)
-    except ValueError as error:
-        if "could not find readable text" not in str(error):
-            raise
-        page_texts = []
-        for offset, image_page in enumerate(image_batch):
-            try:
-                page_texts.append(extract_text_from_image(api_key, image_page, "image/png", client=client))
-            except ValueError:
-                page_texts.append(f"[Page {first_page + offset} could not be read.]")
-        return "\n\n".join(page_texts)
+def prepare_ai_source(selected_notes: list[dict[str, object]], labeler) -> tuple[str, bool]:
+    """Keep AI quiz prompts bounded while sampling every selected chapter fairly."""
+    if not selected_notes:
+        return "", False
+    raw_text = "\n\n".join(
+        f"--- {labeler(note)} ---\n{note['content']}" for note in selected_notes
+    )
+    if len(raw_text) <= MAX_AI_SOURCE_CHARACTERS:
+        return raw_text, False
+    allowance = max(2_000, MAX_AI_SOURCE_CHARACTERS // len(selected_notes))
+    sampled = []
+    for note in selected_notes:
+        content = str(note["content"])
+        if len(content) > allowance:
+            content = content[:allowance] + "\n[This chapter continues in StudySpring.]"
+        sampled.append(f"--- {labeler(note)} ---\n{content}")
+    return "\n\n".join(sampled)[:MAX_AI_SOURCE_CHARACTERS], True
 
 
 def make_progress_csv(attempts: list[dict[str, object]]) -> str:
@@ -426,7 +429,10 @@ with st.expander("Add study material", expanded=not study_notes):
                 st.rerun()
 
     elif material_type == "Pages from a scanned PDF":
-        st.caption(f"Choose up to {MAX_SELECTED_SCANNED_PDF_PAGES} pages. StudySpring handles the smaller AI batches automatically.")
+        st.caption(
+            f"Choose up to {MAX_SELECTED_SCANNED_PDF_PAGES} pages. Readable pages stay local; "
+            "only scanned pages are sent to Gemini one at a time."
+        )
         with st.form("upload_scanned_pdf_form", clear_on_submit=True):
             scanned_pdf = st.file_uploader("Choose a scanned PDF", type=["pdf"], key="scanned_pdf")
             first_page = st.number_input("First page", min_value=1, value=1, step=1)
@@ -438,19 +444,21 @@ with st.expander("Add study material", expanded=not study_notes):
             try:
                 if scanned_pdf is None:
                     raise ValueError("Choose a scanned PDF before continuing.")
-                if not api_key:
-                    raise ValueError("Add GEMINI_API_KEY to Streamlit secrets before reading scans.")
                 if not 1 <= page_count <= MAX_SELECTED_SCANNED_PDF_PAGES:
                     raise ValueError(f"Choose between 1 and {MAX_SELECTED_SCANNED_PDF_PAGES} pages.")
-                page_images = render_scanned_pdf_pages(scanned_pdf.getvalue(), int(first_page), int(last_page))
-                scan_client = create_gemini_client(api_key)
-                extracted_batches = []
                 progress = st.progress(0, text="Reading scanned PDF pages...")
-                for batch_start in range(0, len(page_images), 5):
-                    batch_end = min(batch_start + 5, len(page_images))
-                    progress.progress(batch_start / len(page_images), text=f"Reading pages {int(first_page) + batch_start}-{int(first_page) + batch_end - 1}...")
-                    extracted_batches.append(transcribe_scanned_page_batch(api_key, page_images[batch_start:batch_end], int(first_page) + batch_start, client=scan_client))
-                create_study_note(selected_course["id"], f"{scanned_pdf.name.rsplit('.', 1)[0]} pages {first_page}-{last_page}", "\n\n".join(extracted_batches), new_note_unit, new_note_lesson, new_note_chapter, new_note_source_group)
+                pages = read_pdf_pages_for_import(
+                    scanned_pdf.getvalue(), int(first_page), int(last_page), api_key, progress
+                )
+                create_study_note(
+                    selected_course["id"],
+                    f"{scanned_pdf.name.rsplit('.', 1)[0]} pages {first_page}-{last_page}",
+                    "\n\n".join(text for _, text in pages),
+                    new_note_unit,
+                    new_note_lesson,
+                    new_note_chapter,
+                    new_note_source_group,
+                )
             except Exception as error:
                 st.error(f"We could not read those PDF pages: {error}")
             else:
@@ -458,44 +466,39 @@ with st.expander("Add study material", expanded=not study_notes):
                 st.rerun()
 
     else:
-        st.caption("Best for a whole scanned textbook. It reads in small batches behind the scenes, then saves one complete study note.")
+        st.caption(
+            "Best for a whole textbook. StudySpring reads one page at a time, then saves "
+            "separate chapter/unit-sized sources so AI quizzes never need the whole book at once."
+        )
         with st.form("scan_entire_pdf_form", clear_on_submit=True):
             entire_pdf = st.file_uploader("Choose the full scanned PDF", type=["pdf"], key="entire_pdf")
             confirmed = st.checkbox("I understand this can take a long time and use many Gemini requests.")
             start_full_scan = st.form_submit_button("Scan entire PDF automatically", width="stretch")
         if start_full_scan:
             api_key = gemini_api_key()
-            completed_batches = 0
+            saved_sections = 0
             try:
                 if not confirmed:
                     raise ValueError("Check the confirmation box before starting the full scan.")
                 if entire_pdf is None:
                     raise ValueError("Choose a scanned PDF before continuing.")
-                if not api_key:
-                    raise ValueError("Add GEMINI_API_KEY to Streamlit secrets before scanning PDFs.")
                 pdf_bytes = entire_pdf.getvalue()
-                total_pages = scanned_pdf_page_count(pdf_bytes)
-                scan_client = create_gemini_client(api_key)
-                extracted_batches = []
+                total_pages = pdf_page_count(pdf_bytes)
                 progress = st.progress(0, text="Preparing full-PDF scan...")
-                for batch_first in range(1, total_pages + 1, 5):
-                    batch_last = min(batch_first + 4, total_pages)
-                    progress.progress((batch_first - 1) / total_pages, text=f"Reading pages {batch_first}-{batch_last} of {total_pages}...")
-                    images = render_scanned_pdf_pages(pdf_bytes, batch_first, batch_last)
-                    extracted_batches.append(
-                        transcribe_scanned_page_batch(api_key, images, batch_first, client=scan_client)
+                pages = read_pdf_pages_for_import(pdf_bytes, 1, total_pages, api_key, progress)
+                sections = split_textbook_sections(pages)
+                progress.progress(1.0, text="Saving textbook sections...")
+                for section in sections:
+                    create_study_note(
+                        selected_course["id"],
+                        f"{entire_pdf.name.rsplit('.', 1)[0]} — {section.title}",
+                        section.text,
+                        new_note_unit or section.title,
+                        new_note_lesson,
+                        new_note_chapter or f"Pages {section.first_page}-{section.last_page}",
+                        new_note_source_group,
                     )
-                    completed_batches += 1
-                progress.progress(1.0, text="Saving your complete study note...")
-                create_study_note(
-                    selected_course["id"],
-                    f"{entire_pdf.name.rsplit('.', 1)[0]} (complete scan)",
-                    "\n\n".join(extracted_batches),
-                    new_note_unit,
-                    new_note_lesson,
-                    new_note_chapter,
-                    new_note_source_group,
-                )
+                    saved_sections += 1
             except Exception as error:
                 if "WinError 10013" in str(error):
                     st.error(
@@ -503,9 +506,14 @@ with st.expander("Add study material", expanded=not study_notes):
                         "Wait a minute, then try again. If it continues, temporarily allow Python through Windows Firewall or disconnect a VPN."
                     )
                 else:
-                    st.error(f"The full scan stopped after {completed_batches} completed batch(es): {error}")
+                    st.error(
+                        f"The scan stopped after saving {saved_sections} section(s): {error}. "
+                        "Any saved sections are still available in your study material."
+                    )
             else:
-                st.success(f"Finished scanning {total_pages} pages into one complete study note!")
+                st.success(
+                    f"Finished reading {total_pages} pages into {saved_sections} organized textbook section(s)!"
+                )
                 st.rerun()
 
 if len(study_notes) >= 2:
@@ -699,13 +707,16 @@ if study_notes:
                     f"This quiz will combine {len(lesson_notes)} lesson item(s) with {len(textbook_notes)} textbook item(s)."
                 )
 
-            source_text = "\n\n".join(
-                f"--- {ai_note_label(note)} ---\n{note['content']}"
-                for note in selected_notes
-            )
+            source_text, source_was_limited = prepare_ai_source(selected_notes, ai_note_label)
             if selected_notes:
                 st.caption(
                     f"Selected source: {len(selected_notes)} note(s), {len(source_text):,} characters."
+                )
+            if source_was_limited:
+                st.info(
+                    "This textbook is larger than one safe AI request. StudySpring is using a "
+                    "balanced sample from each selected chapter. Choose specific chapters for a "
+                    "more focused quiz."
                 )
             source_length = len(source_text)
             if source_length <= 4_000:

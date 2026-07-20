@@ -35,6 +35,16 @@ _HEADING = re.compile(
 )
 
 
+def is_unreadable_ocr_error(error: Exception) -> bool:
+    """Return whether OCR simply found no usable text, not a service failure."""
+    message = str(error).lower()
+    return (
+        "could not find readable text" in message
+        or "no readable text" in message
+        or "no text was found" in message
+    )
+
+
 def pdf_page_count(file_bytes: bytes) -> int:
     """Return a validated page count without rendering any page."""
     import fitz

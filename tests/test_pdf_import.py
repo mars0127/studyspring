@@ -9,6 +9,7 @@ except ImportError:  # The lightweight test runner may not have optional PDF ren
 
 from pdf_import import (
     MAX_CHARS_PER_TEXTBOOK_SECTION,
+    is_unreadable_ocr_error,
     iter_pdf_pages,
     pdf_page_count,
     split_textbook_sections,
@@ -16,6 +17,10 @@ from pdf_import import (
 
 
 class TextbookSectionTests(unittest.TestCase):
+    def test_unreadable_ocr_errors_can_be_skipped(self) -> None:
+        self.assertTrue(is_unreadable_ocr_error(ValueError("Gemini could not find readable text in that image.")))
+        self.assertFalse(is_unreadable_ocr_error(RuntimeError("429 RESOURCE_EXHAUSTED")))
+
     @unittest.skipIf(fitz is None, "PyMuPDF is not installed in this test environment")
     def test_digital_pdf_uses_embedded_text_without_an_image(self) -> None:
         document = fitz.open()

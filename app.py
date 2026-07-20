@@ -40,7 +40,12 @@ from gemini_client import (
     generate_questions,
 )
 from course_starters import COURSE_STARTERS
-from pdf_import import iter_pdf_pages, pdf_page_count, split_textbook_sections
+from pdf_import import (
+    is_unreadable_ocr_error,
+    iter_pdf_pages,
+    pdf_page_count,
+    split_textbook_sections,
+)
 
 
 MAX_SELECTED_SCANNED_PDF_PAGES = 100
@@ -95,10 +100,11 @@ def read_pdf_pages_for_import(
     last_page: int,
     api_key: str | None,
     progress,
-) -> list[tuple[int, str]]:
-    """Read a PDF incrementally; Gemini sees one unreadable page, never a book."""
+) -> tuple[list[tuple[int, str]], list[int]]:
+    """Read pages independently, preserving the import when an image has no text."""
     total_pages = last_page - first_page + 1
     extracted: list[tuple[int, str]] = []
+    skipped_pages: list[int] = []
     client = None
     for completed, page in enumerate(iter_pdf_pages(file_bytes, first_page, last_page), start=1):
         progress.progress(
@@ -109,17 +115,21 @@ def read_pdf_pages_for_import(
             extracted.append((page.number, page.text))
             continue
         if not api_key:
-            raise ValueError(
-                f"Page {page.number} is a scan and needs Gemini OCR. Add GEMINI_API_KEY, then try again."
-            )
+            skipped_pages.append(page.number)
+            extracted.append((page.number, f"[Page {page.number} was skipped because it is an image-only page and AI OCR is not set up.]"))
+            continue
         client = client or create_gemini_client(api_key)
         try:
             text = extract_text_from_image(api_key, page.image_bytes, "image/png", client=client)
         except Exception as error:
-            raise RuntimeError(f"Page {page.number} could not be read: {error}") from error
+            if not is_unreadable_ocr_error(error):
+                raise RuntimeError(f"Page {page.number} could not be read: {error}") from error
+            skipped_pages.append(page.number)
+            extracted.append((page.number, f"[Page {page.number} was skipped because it contains no readable text.]"))
+            continue
         extracted.append((page.number, text))
     progress.progress(1.0, text="Organizing extracted text...")
-    return extracted
+    return extracted, skipped_pages
 
 
 def prepare_ai_source(selected_notes: list[dict[str, object]], labeler) -> tuple[str, bool]:
@@ -447,7 +457,7 @@ with st.expander("Add study material", expanded=not study_notes):
                 if not 1 <= page_count <= MAX_SELECTED_SCANNED_PDF_PAGES:
                     raise ValueError(f"Choose between 1 and {MAX_SELECTED_SCANNED_PDF_PAGES} pages.")
                 progress = st.progress(0, text="Reading scanned PDF pages...")
-                pages = read_pdf_pages_for_import(
+                pages, skipped_pages = read_pdf_pages_for_import(
                     scanned_pdf.getvalue(), int(first_page), int(last_page), api_key, progress
                 )
                 create_study_note(
@@ -462,8 +472,14 @@ with st.expander("Add study material", expanded=not study_notes):
             except Exception as error:
                 st.error(f"We could not read those PDF pages: {error}")
             else:
-                st.success("Scanned PDF pages saved as editable notes!")
-                st.rerun()
+                if skipped_pages:
+                    st.warning(
+                        f"Saved the readable pages. Skipped image-only or unreadable page(s): "
+                        f"{', '.join(map(str, skipped_pages))}."
+                    )
+                else:
+                    st.success("Scanned PDF pages saved as editable notes!")
+                    st.rerun()
 
     else:
         st.caption(
@@ -485,7 +501,9 @@ with st.expander("Add study material", expanded=not study_notes):
                 pdf_bytes = entire_pdf.getvalue()
                 total_pages = pdf_page_count(pdf_bytes)
                 progress = st.progress(0, text="Preparing full-PDF scan...")
-                pages = read_pdf_pages_for_import(pdf_bytes, 1, total_pages, api_key, progress)
+                pages, skipped_pages = read_pdf_pages_for_import(
+                    pdf_bytes, 1, total_pages, api_key, progress
+                )
                 sections = split_textbook_sections(pages)
                 progress.progress(1.0, text="Saving textbook sections...")
                 for section in sections:
@@ -511,10 +529,15 @@ with st.expander("Add study material", expanded=not study_notes):
                         "Any saved sections are still available in your study material."
                     )
             else:
-                st.success(
-                    f"Finished reading {total_pages} pages into {saved_sections} organized textbook section(s)!"
-                )
-                st.rerun()
+                summary = f"Finished reading {total_pages} pages into {saved_sections} organized textbook section(s)!"
+                if skipped_pages:
+                    st.warning(
+                        f"{summary} Image-only or unreadable page(s) were skipped: "
+                        f"{', '.join(map(str, skipped_pages))}."
+                    )
+                else:
+                    st.success(summary)
+                    st.rerun()
 
 if len(study_notes) >= 2:
     with st.expander("Combine study material"):

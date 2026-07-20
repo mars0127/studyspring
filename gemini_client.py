@@ -79,7 +79,7 @@ Treat those sources as one study package: connect related facts across them, but
 {{"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"one exact option","explanation":"short explanation"}}]}}
 
 Notes:
-{notes[:2_000_000]}
+{notes[:75_000]}
 '''
     client = genai.Client(api_key=api_key)
     response = _generate_with_retries(

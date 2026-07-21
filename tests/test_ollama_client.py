@@ -2,7 +2,7 @@
 
 import unittest
 
-from gemini_client import _semantic_sections, parse_questions, split_question_source
+from gemini_client import _semantic_sections, parse_questions, plan_question_batches, split_question_source
 
 
 class GeminiClientTests(unittest.TestCase):
@@ -40,6 +40,13 @@ class GeminiClientTests(unittest.TestCase):
         self.assertEqual(len(sections), 2)
         self.assertIn("Chapter 7 is compared", sections[0])
         self.assertIn("Chapter 8: Review", sections[1])
+
+    def test_twenty_questions_are_planned_as_small_saved_batches(self) -> None:
+        batches = plan_question_batches("A" * 75_000, 20)
+
+        self.assertEqual(len(batches), 4)
+        self.assertEqual([question_count for _, question_count in batches], [5, 5, 5, 5])
+        self.assertLessEqual(max(len(source) for source, _ in batches), 20_000)
 
 
 if __name__ == "__main__":

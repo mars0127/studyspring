@@ -8,6 +8,10 @@ import time
 
 # Stable multimodal model designed for high-volume extraction work.
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
+MAX_QUESTIONS_PER_REQUEST = 8
+QUESTION_REQUEST_INTERVAL_SECONDS = 5
+QUESTION_QUOTA_RETRY_SECONDS = 65
+MAX_QUESTION_QUOTA_RETRIES = 2
 
 
 def _gemini_modules():
@@ -70,27 +74,81 @@ def parse_questions(raw_response: str) -> list[dict[str, object]]:
     return valid_questions
 
 
-def generate_questions(api_key: str, notes: str, question_count: int = 5) -> list[dict[str, object]]:
-    """Ask Gemini for structured questions based only on the supplied notes."""
+def _is_quota_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return "resource_exhausted" in message or "quota exceeded" in message or " 429" in message
+
+
+def split_question_source(notes: str, request_count: int) -> list[str]:
+    """Divide a large study source across small, reliable AI requests."""
+    source = notes[:75_000].strip()
+    if not source:
+        raise ValueError("Add some study material before generating questions.")
+    if request_count <= 1:
+        return [source]
+    chunk_size = max(1, len(source) // request_count)
+    chunks = []
+    for index in range(request_count):
+        start = index * chunk_size
+        end = len(source) if index == request_count - 1 else (index + 1) * chunk_size
+        chunks.append(source[start:end])
+    return chunks
+
+
+def _generate_question_batch(api_key: str, notes: str, question_count: int) -> list[dict[str, object]]:
+    """Generate one small JSON question batch with a bounded response size."""
     genai, types = _gemini_modules()
     prompt = f'''Create exactly {question_count} multiple-choice study questions from the notes below.
 The source may combine the student's notes with textbook excerpts, slides, and teacher resources.
-Treat those sources as one study package: connect related facts across them, but use only facts supported by the source. Return JSON only, with this exact shape:
+Use only facts supported by the source. Return JSON only, with this exact shape:
 {{"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"one exact option","explanation":"short explanation"}}]}}
 
 Notes:
-{notes[:75_000]}
+{notes}
 '''
     client = genai.Client(api_key=api_key)
     response = _generate_with_retries(
         client,
         model=DEFAULT_MODEL,
         contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json", temperature=0.3, max_output_tokens=4096
+        ),
     )
     if not response.text:
         raise ValueError("Gemini returned an empty response. Please try again.")
     return parse_questions(response.text)
+
+
+def generate_questions(api_key: str, notes: str, question_count: int = 5) -> list[dict[str, object]]:
+    """Generate larger quiz sets in small paced requests instead of one huge call."""
+    if question_count < 1:
+        raise ValueError("Choose at least one question.")
+    batch_sizes = []
+    remaining = question_count
+    while remaining:
+        batch_size = min(MAX_QUESTIONS_PER_REQUEST, remaining)
+        batch_sizes.append(batch_size)
+        remaining -= batch_size
+    source_chunks = split_question_source(notes, len(batch_sizes))
+    generated: list[dict[str, object]] = []
+    for index, (batch_size, source_chunk) in enumerate(zip(batch_sizes, source_chunks)):
+        if index:
+            time.sleep(QUESTION_REQUEST_INTERVAL_SECONDS)
+        for quota_attempt in range(MAX_QUESTION_QUOTA_RETRIES + 1):
+            try:
+                generated.extend(_generate_question_batch(api_key, source_chunk, batch_size))
+                break
+            except Exception as error:
+                if _is_quota_error(error) and quota_attempt < MAX_QUESTION_QUOTA_RETRIES:
+                    time.sleep(QUESTION_QUOTA_RETRY_SECONDS)
+                    continue
+                if _is_quota_error(error):
+                    raise RuntimeError(
+                        "Gemini is still at its temporary request limit. Wait a minute, then try again."
+                    ) from error
+                raise
+    return generated[:question_count]
 
 
 def grade_short_answer(

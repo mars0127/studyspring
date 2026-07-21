@@ -2,7 +2,7 @@
 
 import unittest
 
-from gemini_client import parse_questions
+from gemini_client import parse_questions, split_question_source
 
 
 class GeminiClientTests(unittest.TestCase):
@@ -17,6 +17,14 @@ class GeminiClientTests(unittest.TestCase):
     def test_parse_questions_rejects_invalid_questions(self) -> None:
         with self.assertRaises(ValueError):
             parse_questions('{"questions":[{"topic":"Bad"}]}')
+
+    def test_large_question_source_is_split_without_losing_text(self) -> None:
+        source = "A" * 75_000
+        chunks = split_question_source(source, 3)
+
+        self.assertEqual(len(chunks), 3)
+        self.assertEqual("".join(chunks), source)
+        self.assertLessEqual(max(len(chunk) for chunk in chunks), 25_000)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 import unittest
 
-from gemini_client import parse_questions, split_question_source
+from gemini_client import _semantic_sections, parse_questions, split_question_source
 
 
 class GeminiClientTests(unittest.TestCase):
@@ -22,9 +22,24 @@ class GeminiClientTests(unittest.TestCase):
         source = "A" * 75_000
         chunks = split_question_source(source, 3)
 
-        self.assertEqual(len(chunks), 3)
+        self.assertEqual(len(chunks), 4)
         self.assertEqual("".join(chunks), source)
-        self.assertLessEqual(max(len(chunk) for chunk in chunks), 25_000)
+        self.assertLessEqual(max(len(chunk) for chunk in chunks), 20_000)
+
+    def test_chapter_references_and_tiny_sections_do_not_become_boundaries(self) -> None:
+        source = (
+            "Chapter 6: Functions\n" + "A" * 5_000
+            + "\n\nChapter 7 is compared later in this chapter.\n"
+            + "B" * 1_000
+            + "\n\nChapter 7: Exponentials\n" + "C" * 5_000
+            + "\n\nChapter 8: Review\n" + "D" * 200
+        )
+
+        sections = _semantic_sections(source)
+
+        self.assertEqual(len(sections), 2)
+        self.assertIn("Chapter 7 is compared", sections[0])
+        self.assertIn("Chapter 8: Review", sections[1])
 
 
 if __name__ == "__main__":

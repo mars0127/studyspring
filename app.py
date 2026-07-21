@@ -842,26 +842,40 @@ if study_notes:
                     "but avoids one oversized request failing."
                 )
             if st.button("Generate AI questions", width="stretch"):
+                generation_progress = {"saved_question_count": 0}
+
+                def save_question_batch(batch, completed_batch, total_batches):
+                    """Save each completed AI batch before asking Gemini again."""
+                    for generated_question in batch:
+                        create_quiz_question(
+                            selected_course["id"],
+                            generated_question["topic"],
+                            generated_question["question"],
+                            generated_question["options"],
+                            generated_question["correct_answer"],
+                            generated_question["explanation"],
+                        )
+                    generation_progress["saved_question_count"] += len(batch)
+
                 try:
                     if not selected_notes:
                         raise ValueError("Choose at least one study note first.")
                     with st.spinner("Creating practice questions from your selected study material..."):
                         generated_questions = generate_questions(
-                            api_key, source_text, question_count
+                            api_key,
+                            source_text,
+                            question_count,
+                            on_batch_complete=save_question_batch,
                         )
-                        for generated_question in generated_questions:
-                            create_quiz_question(
-                                selected_course["id"],
-                                generated_question["topic"],
-                                generated_question["question"],
-                                generated_question["options"],
-                                generated_question["correct_answer"],
-                                generated_question["explanation"],
-                            )
                 except Exception as error:
-                    st.error(f"We could not generate questions: {error}")
+                    if generation_progress["saved_question_count"]:
+                        st.warning(
+                            f"Saved {generation_progress['saved_question_count']} question(s), but the remaining batch could not finish: {error}"
+                        )
+                    else:
+                        st.error(f"We could not generate questions: {error}")
                 else:
-                    st.success(f"Saved {len(generated_questions)} AI-generated question(s)!")
+                    st.success(f"Saved {generation_progress['saved_question_count']} AI-generated question(s)!")
                     st.session_state["open_practice_quiz"] = True
                     st.rerun()
         else:

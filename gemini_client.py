@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from collections.abc import Callable
 
 
 # Stable multimodal model designed for high-volume extraction work.
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
-MAX_QUESTIONS_PER_REQUEST = 8
-QUESTION_REQUEST_INTERVAL_SECONDS = 5
+# Keeping a request small matters more on Render than the model's theoretical
+# context window.  This prevents a long quiz from holding one browser request
+# open while it produces a very large JSON response.
+MAX_QUESTIONS_PER_REQUEST = 5
+MAX_SOURCE_CHARACTERS_PER_REQUEST = 20_000
+MIN_SEMANTIC_SECTION_CHARACTERS = 3_000
+QUESTION_REQUEST_INTERVAL_SECONDS = 6
 QUESTION_QUOTA_RETRY_SECONDS = 65
 MAX_QUESTION_QUOTA_RETRIES = 2
 
@@ -79,32 +86,111 @@ def _is_quota_error(error: Exception) -> bool:
     return "resource_exhausted" in message or "quota exceeded" in message or " 429" in message
 
 
+def _split_at_paragraph_boundaries(text: str, maximum_size: int) -> list[str]:
+    """Split one long section without cutting words or formulas in half."""
+    if len(text) <= maximum_size:
+        return [text]
+    pieces: list[str] = []
+    remaining = text
+    while len(remaining) > maximum_size:
+        split_at = remaining.rfind("\n\n", 0, maximum_size)
+        if split_at < maximum_size // 2:
+            split_at = remaining.rfind("\n", 0, maximum_size)
+        if split_at < maximum_size // 2:
+            split_at = remaining.rfind(" ", 0, maximum_size)
+        if split_at < 1:
+            split_at = maximum_size
+        pieces.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        pieces.append(remaining)
+    return pieces
+
+
+def _semantic_sections(source: str) -> list[str]:
+    """Use chapter/unit/lesson headings before falling back to paragraph chunks.
+
+    Imported PDFs often preserve headings such as "Chapter 6" or "Unit 2".
+    Keeping those sections together gives Gemini a focused, coherent source
+    instead of an arbitrary slice across two unrelated lessons.
+    """
+    heading = re.compile(
+        r"(?im)^(?=(?:chapter|unit|lesson|section|topic)\s+(?:\d+|[ivxlcdm]+)"
+        r"(?:\s*[:\-]|\s*$))"
+    )
+    starts = [match.start() for match in heading.finditer(source)]
+    if not starts or starts[0] != 0:
+        starts.insert(0, 0)
+    candidates = [
+        source[start:end].strip()
+        for start, end in zip(starts, starts[1:] + [len(source)])
+        if source[start:end].strip()
+    ]
+    # A textbook can mention another chapter in ordinary prose.  A two-page
+    # "chapter" is a strong sign that a match is not a useful structural
+    # boundary, so merge short candidates into their neighbour instead of
+    # generating a separate quiz slice from them.
+    sections: list[str] = []
+    for candidate in candidates:
+        if sections and len(candidate) < MIN_SEMANTIC_SECTION_CHARACTERS:
+            sections[-1] += "\n\n" + candidate
+        else:
+            sections.append(candidate)
+    if len(sections) > 1 and len(sections[0]) < MIN_SEMANTIC_SECTION_CHARACTERS:
+        sections[1] = sections[0] + "\n\n" + sections[1]
+        sections.pop(0)
+    return sections or [source]
+
+
 def split_question_source(notes: str, request_count: int) -> list[str]:
-    """Divide a large study source across small, reliable AI requests."""
+    """Create coherent, bounded source chunks for a larger quiz.
+
+    This preserves the full prepared source and preferentially separates it at
+    real chapter, unit, lesson, or topic headings.  It is intentionally not a
+    database split: students still keep one imported note and can quiz it in
+    one click.
+    """
     source = notes[:75_000].strip()
     if not source:
         raise ValueError("Add some study material before generating questions.")
-    if request_count <= 1:
-        return [source]
-    chunk_size = max(1, len(source) // request_count)
-    chunks = []
-    for index in range(request_count):
-        start = index * chunk_size
-        end = len(source) if index == request_count - 1 else (index + 1) * chunk_size
-        chunks.append(source[start:end])
+    effective_request_count = max(
+        request_count,
+        (len(source) + MAX_SOURCE_CHARACTERS_PER_REQUEST - 1)
+        // MAX_SOURCE_CHARACTERS_PER_REQUEST,
+    )
+    target_size = max(1, (len(source) + effective_request_count - 1) // effective_request_count)
+    target_size = min(MAX_SOURCE_CHARACTERS_PER_REQUEST, target_size)
+    pieces = [
+        piece
+        for section in _semantic_sections(source)
+        for piece in _split_at_paragraph_boundaries(section, target_size)
+        if piece
+    ]
+
+    chunks: list[str] = []
+    current = ""
+    for piece in pieces:
+        separator = "\n\n" if current else ""
+        if current and len(current) + len(separator) + len(piece) > target_size:
+            chunks.append(current)
+            current = piece
+        else:
+            current += separator + piece
+    if current:
+        chunks.append(current)
     return chunks
 
 
 def _generate_question_batch(api_key: str, notes: str, question_count: int) -> list[dict[str, object]]:
     """Generate one small JSON question batch with a bounded response size."""
     genai, types = _gemini_modules()
-    prompt = f'''Create exactly {question_count} multiple-choice study questions from the notes below.
-The source may combine the student's notes with textbook excerpts, slides, and teacher resources.
-Use only facts supported by the source. Return JSON only, with this exact shape:
-{{"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"one exact option","explanation":"short explanation"}}]}}
-
-Notes:
+    prompt = f'''Study material:
 {notes}
+
+Based only on the study material above, create exactly {question_count} multiple-choice study questions.
+The source may combine the student's notes with textbook excerpts, slides, and teacher resources.
+Return JSON only, with this exact shape:
+{{"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"one exact option","explanation":"short explanation"}}]}}
 '''
     client = genai.Client(api_key=api_key)
     response = _generate_with_retries(
@@ -120,24 +206,36 @@ Notes:
     return parse_questions(response.text)
 
 
-def generate_questions(api_key: str, notes: str, question_count: int = 5) -> list[dict[str, object]]:
+def generate_questions(
+    api_key: str,
+    notes: str,
+    question_count: int = 5,
+    on_batch_complete: Callable[[list[dict[str, object]], int, int], None] | None = None,
+) -> list[dict[str, object]]:
     """Generate larger quiz sets in small paced requests instead of one huge call."""
     if question_count < 1:
         raise ValueError("Choose at least one question.")
-    batch_sizes = []
-    remaining = question_count
-    while remaining:
-        batch_size = min(MAX_QUESTIONS_PER_REQUEST, remaining)
-        batch_sizes.append(batch_size)
-        remaining -= batch_size
-    source_chunks = split_question_source(notes, len(batch_sizes))
+    minimum_batches = (question_count + MAX_QUESTIONS_PER_REQUEST - 1) // MAX_QUESTIONS_PER_REQUEST
+    source_chunks = split_question_source(notes, minimum_batches)
+    # Give each coherent part a share of the requested questions.  The number
+    # of requests is also bounded by the source size, not only by the number of
+    # questions, so no request receives an oversized PDF excerpt.
+    batch_count = max(minimum_batches, len(source_chunks))
+    source_chunks = split_question_source(notes, batch_count)
+    base_count, extra = divmod(question_count, len(source_chunks))
+    batch_sizes = [base_count + (1 if index < extra else 0) for index in range(len(source_chunks))]
     generated: list[dict[str, object]] = []
     for index, (batch_size, source_chunk) in enumerate(zip(batch_sizes, source_chunks)):
+        if batch_size == 0:
+            continue
         if index:
             time.sleep(QUESTION_REQUEST_INTERVAL_SECONDS)
         for quota_attempt in range(MAX_QUESTION_QUOTA_RETRIES + 1):
             try:
-                generated.extend(_generate_question_batch(api_key, source_chunk, batch_size))
+                batch_questions = _generate_question_batch(api_key, source_chunk, batch_size)
+                generated.extend(batch_questions)
+                if on_batch_complete:
+                    on_batch_complete(batch_questions, index + 1, len(source_chunks))
                 break
             except Exception as error:
                 if _is_quota_error(error) and quota_attempt < MAX_QUESTION_QUOTA_RETRIES:

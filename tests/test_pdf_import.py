@@ -1,6 +1,8 @@
 """Tests for bounded textbook-section behaviour."""
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 try:
     import fitz
@@ -12,7 +14,9 @@ from pdf_import import (
     is_ocr_quota_error,
     is_unreadable_ocr_error,
     iter_pdf_pages,
+    iter_pdf_pages_from_path,
     pdf_page_count,
+    pdf_page_count_from_path,
     split_textbook_sections,
 )
 
@@ -39,6 +43,19 @@ class TextbookSectionTests(unittest.TestCase):
         self.assertEqual(pdf_page_count(pdf_bytes), 1)
         self.assertIn("selectable textbook text", pages[0].text)
         self.assertIsNone(pages[0].image_bytes)
+
+    @unittest.skipIf(fitz is None, "PyMuPDF is not installed in this test environment")
+    def test_digital_pdf_can_be_read_from_a_temporary_file(self) -> None:
+        document = fitz.open()
+        page = document.new_page()
+        page.insert_text((72, 72), "Temporary-file PDF extraction keeps the original PDF out of scan memory. " * 2)
+        with TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "notes.pdf"
+            document.save(pdf_path)
+            pages = list(iter_pdf_pages_from_path(pdf_path, 1, 1))
+            self.assertEqual(pdf_page_count_from_path(pdf_path), 1)
+            self.assertIsNone(pages[0].image_bytes)
+        document.close()
 
     def test_splits_at_a_chapter_heading(self) -> None:
         sections = split_textbook_sections(

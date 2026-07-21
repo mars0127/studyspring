@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 
 
 MAX_CHARS_PER_TEXTBOOK_SECTION = 55_000
@@ -66,6 +67,21 @@ def pdf_page_count(file_bytes: bytes) -> int:
         document.close()
 
 
+def pdf_page_count_from_path(pdf_path: Path) -> int:
+    """Count pages from a temporary PDF file without loading it into memory."""
+    import fitz
+
+    document = fitz.open(pdf_path)
+    try:
+        if document.needs_pass:
+            raise ValueError("This PDF is password-protected. Remove the password, then upload it again.")
+        if not len(document):
+            raise ValueError("This PDF has no pages.")
+        return len(document)
+    finally:
+        document.close()
+
+
 def iter_pdf_pages(file_bytes: bytes, first_page: int, last_page: int) -> Iterator[PdfPage]:
     """Yield one page's local text or one temporary OCR image at a time."""
     import fitz
@@ -84,6 +100,31 @@ def iter_pdf_pages(file_bytes: bytes, first_page: int, last_page: int) -> Iterat
                 continue
             # Low resolution is sufficient for printed textbook text and keeps each
             # request small. The pixmap is released before the next page is rendered.
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(1.25, 1.25), alpha=False)
+            try:
+                yield PdfPage(page_number + 1, text, pixmap.tobytes("png"))
+            finally:
+                del pixmap
+    finally:
+        document.close()
+
+
+def iter_pdf_pages_from_path(pdf_path: Path, first_page: int, last_page: int) -> Iterator[PdfPage]:
+    """Yield current pages from a temporary file, keeping the original PDF off RAM."""
+    import fitz
+
+    document = fitz.open(pdf_path)
+    try:
+        if document.needs_pass:
+            raise ValueError("This PDF is password-protected. Remove the password, then upload it again.")
+        if first_page < 1 or last_page < first_page or last_page > len(document):
+            raise ValueError(f"Choose pages between 1 and {len(document)}.")
+        for page_number in range(first_page - 1, last_page):
+            page = document.load_page(page_number)
+            text = page.get_text("text").strip()
+            if len(text) >= MIN_USABLE_EMBEDDED_TEXT:
+                yield PdfPage(page_number + 1, text, None)
+                continue
             pixmap = page.get_pixmap(matrix=fitz.Matrix(1.25, 1.25), alpha=False)
             try:
                 yield PdfPage(page_number + 1, text, pixmap.tobytes("png"))

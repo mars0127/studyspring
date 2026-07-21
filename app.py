@@ -63,7 +63,7 @@ from pdf_import import (
 MAX_SELECTED_SCANNED_PDF_PAGES = 120
 MAX_AI_SOURCE_CHARACTERS = 75_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
-APP_VERSION = "2026.07.21.4"
+APP_VERSION = "2026.07.21.5"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -1148,7 +1148,13 @@ with st.expander(
                 st.caption("Answer a few quizzes first; then adaptive review will learn your weaker topics.")
 
         maximum_quiz_size = min(15, len(quiz_candidates))
-        if maximum_quiz_size == 1:
+        if maximum_quiz_size == 0:
+            quiz_size = 0
+            st.info(
+                "There are no multiple-choice questions for this selection yet. "
+                "Generate some questions or choose a different topic."
+            )
+        elif maximum_quiz_size == 1:
             quiz_size = 1
             st.caption("This selection currently has 1 saved question.")
         else:
@@ -1171,7 +1177,9 @@ with st.expander(
                     index=None,
                     key=f"quiz_answer_{question['id']}",
                 )
-            submitted_quiz = st.form_submit_button("Submit quiz", width="stretch")
+            submitted_quiz = st.form_submit_button(
+                "Submit quiz", width="stretch", disabled=not active_quiz_questions
+            )
 
         if submitted_quiz:
             if any(answer is None for answer in selected_answers.values()):

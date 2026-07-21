@@ -53,6 +53,18 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(database.list_courses(), [])
         self.assertEqual(database.list_study_notes(course["id"]), [])
 
+    def test_import_note_can_be_saved_in_batches(self) -> None:
+        database.create_course("Physics", "Science", None)
+        course = database.list_courses()[0]
+        note_id = database.create_study_note(course["id"], "Importing", "Working...")
+        database.replace_study_note_content(note_id, "Page 1")
+        database.append_study_note_content(note_id, "Page 2")
+        database.rename_study_note(note_id, "Physics notes")
+
+        note = database.list_study_notes(course["id"])[0]
+        self.assertEqual(note["title"], "Physics notes")
+        self.assertEqual(note["content"], "Page 1\n\nPage 2")
+
 
 if __name__ == "__main__":
     unittest.main()

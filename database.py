@@ -255,7 +255,7 @@ def list_courses() -> list[sqlite3.Row]:
 
 def create_study_note(
     course_id: int, title: str, content: str, unit: str = "", lesson: str = "", chapter: str = "", source_group: str = "lesson"
-) -> None:
+) -> int:
     """Save study material for a particular course."""
     clean_title = title.strip()
     clean_content = content.strip()
@@ -264,10 +264,41 @@ def create_study_note(
         raise ValueError("A note title and note content are required.")
 
     with get_connection() as connection:
-        connection.execute(
+        cursor = connection.execute(
             "INSERT INTO study_notes (course_id, title, content, unit, lesson, chapter, source_group) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (course_id, clean_title, clean_content, unit.strip(), lesson.strip(), chapter.strip(), source_group),
         )
+        return int(cursor.lastrowid)
+
+
+def append_study_note_content(note_id: int, content: str) -> None:
+    """Append a finished import batch to the same saved study note."""
+    clean_content = content.strip()
+    if not clean_content:
+        return
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE study_notes SET content = content || ? WHERE id = ?",
+            ("\n\n" + clean_content, note_id),
+        )
+
+
+def replace_study_note_content(note_id: int, content: str) -> None:
+    """Replace the temporary import marker with the first completed page batch."""
+    clean_content = content.strip()
+    if not clean_content:
+        return
+    with get_connection() as connection:
+        connection.execute("UPDATE study_notes SET content = ? WHERE id = ?", (clean_content, note_id))
+
+
+def rename_study_note(note_id: int, title: str) -> None:
+    """Finish an import by replacing its temporary in-progress title."""
+    clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("A note title is required.")
+    with get_connection() as connection:
+        connection.execute("UPDATE study_notes SET title = ? WHERE id = ?", (clean_title, note_id))
 
 
 def list_study_notes(course_id: int) -> list[sqlite3.Row]:

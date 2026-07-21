@@ -16,6 +16,7 @@ from database import (
     create_flashcard,
     create_quiz_question,
     create_study_note,
+    append_study_note_content,
     course_quiz_stats,
     course_attempt_history,
     course_topic_stats,
@@ -29,6 +30,8 @@ from database import (
     list_study_notes,
     record_quiz_attempt,
     record_quiz_session,
+    rename_study_note,
+    replace_study_note_content,
     update_study_note_organization,
     update_study_note,
     update_course,
@@ -62,6 +65,7 @@ MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES = int(
 OCR_REQUEST_INTERVAL_SECONDS = float(os.getenv("OCR_REQUEST_INTERVAL_SECONDS", "5"))
 OCR_QUOTA_RETRY_SECONDS = int(os.getenv("OCR_QUOTA_RETRY_SECONDS", "65"))
 MAX_OCR_QUOTA_RETRIES = 3
+PDF_SCAN_BATCH_SIZE = 6
 
 
 st.set_page_config(page_title="StudySpring", page_icon="🌱", layout="wide")
@@ -543,12 +547,11 @@ with st.expander("Add study material", expanded=not study_notes):
             entire_pdf = st.file_uploader("Choose a scanned PDF", type=["pdf"], key="entire_pdf")
             confirmed = st.checkbox("I understand scanned pages are read one at a time and large scans can take several minutes.")
             start_full_scan = st.form_submit_button("Scan and save PDF", width="stretch")
+        scan_job_key = f"pdf_scan_job_{selected_course['id']}"
         if start_full_scan:
-            api_key = gemini_api_key()
-            saved_sections = 0
             try:
                 if not confirmed:
-                    raise ValueError("Check the confirmation box before starting the full scan.")
+                    raise ValueError("Check the confirmation box before starting the scan.")
                 if entire_pdf is None:
                     raise ValueError("Choose a scanned PDF before continuing.")
                 validate_upload_size(entire_pdf, "This PDF")
@@ -556,46 +559,73 @@ with st.expander("Add study material", expanded=not study_notes):
                 total_pages = pdf_page_count(pdf_bytes)
                 if total_pages > MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES:
                     raise ValueError(
-                        f"This chapter has {total_pages} pages. The hosted scanner safely handles up to "
-                        f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time. Split it into smaller ranges first."
+                        f"This PDF has {total_pages} pages. The hosted scanner safely handles up to "
+                        f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time."
                     )
-                progress = st.progress(0, text="Preparing full-PDF scan...")
-                pages, skipped_pages, ocr_pause_reason = read_pdf_pages_for_import(
-                    pdf_bytes, 1, total_pages, api_key, progress
-                )
-                progress.progress(1.0, text="Saving your study note...")
-                create_study_note(
+                final_title = entire_pdf.name.rsplit('.', 1)[0]
+                note_id = create_study_note(
                     selected_course["id"],
-                    entire_pdf.name.rsplit('.', 1)[0],
-                    "\n\n".join(text for _, text in pages),
+                    f"{final_title} (importing)",
+                    "[Import in progress — pages will appear here as they are read.]",
                     new_note_unit,
                     new_note_lesson,
                     new_note_chapter,
                     new_note_source_group,
                 )
-                saved_sections = 1
-            except Exception as error:
-                if "WinError 10013" in str(error):
-                    st.error(
-                        "Windows temporarily blocked StudySpring's connection to Gemini before the scan could start. "
-                        "Wait a minute, then try again. If it continues, temporarily allow Python through Windows Firewall or disconnect a VPN."
-                    )
-                else:
-                    st.error(
-                        f"The scan stopped after saving {saved_sections} section(s): {error}. "
-                        "Any saved sections are still available in your study material."
-                    )
-            else:
-                summary = f"Finished reading {total_pages} pages into one saved study note!"
-                if skipped_pages:
-                    summary = (
-                        f"{summary} Image-only or unreadable page(s) were skipped: "
-                        f"{', '.join(map(str, skipped_pages))}."
-                    )
-                    if ocr_pause_reason:
-                        summary += f" {ocr_pause_reason}"
-                st.session_state["import_status"] = {"message": summary, "warning": bool(skipped_pages)}
+                st.session_state[scan_job_key] = {
+                    "bytes": pdf_bytes,
+                    "title": final_title,
+                    "note_id": note_id,
+                    "total_pages": total_pages,
+                    "next_page": 1,
+                    "skipped_pages": [],
+                }
                 st.rerun()
+            except Exception as error:
+                st.error(f"We could not start that PDF scan: {error}")
+
+        scan_job = st.session_state.get(scan_job_key)
+        if scan_job:
+            batch_first = int(scan_job["next_page"])
+            batch_last = min(
+                batch_first + PDF_SCAN_BATCH_SIZE - 1, int(scan_job["total_pages"])
+            )
+            progress = st.progress(
+                (batch_first - 1) / int(scan_job["total_pages"]),
+                text=f"Reading pages {batch_first}-{batch_last} of {scan_job['total_pages']}...",
+            )
+            try:
+                pages, skipped_pages, _ = read_pdf_pages_for_import(
+                    scan_job["bytes"], batch_first, batch_last, gemini_api_key(), progress
+                )
+                batch_text = "\n\n".join(text for _, text in pages)
+                if batch_first == 1:
+                    replace_study_note_content(int(scan_job["note_id"]), batch_text)
+                else:
+                    append_study_note_content(int(scan_job["note_id"]), batch_text)
+                scan_job["next_page"] = batch_last + 1
+                scan_job["skipped_pages"].extend(skipped_pages)
+            except Exception as error:
+                st.error(
+                    f"The scan paused at page {batch_first}. The pages already completed are saved in "
+                    "the same note. Use Continue scan after the connection or AI limit settles. "
+                    f"Details: {error}"
+                )
+                if st.button("Continue scan", key=f"continue_scan_{selected_course['id']}"):
+                    st.rerun()
+            else:
+                if int(scan_job["next_page"]) <= int(scan_job["total_pages"]):
+                    st.session_state[scan_job_key] = scan_job
+                    st.rerun()
+                else:
+                    rename_study_note(int(scan_job["note_id"]), str(scan_job["title"]))
+                    skipped = scan_job["skipped_pages"]
+                    message = f"Finished reading {scan_job['total_pages']} pages into one saved study note!"
+                    if skipped:
+                        message += f" Pages without readable text: {', '.join(map(str, skipped))}."
+                    st.session_state.pop(scan_job_key, None)
+                    st.session_state["import_status"] = {"message": message, "warning": bool(skipped)}
+                    st.rerun()
 
 if len(study_notes) >= 2:
     with st.expander("Combine study material"):

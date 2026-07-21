@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
 
-DATABASE_PATH = Path(__file__).with_name("studyspring.db")
+# Set STUDYSPRING_DATABASE_PATH to a mounted Render disk path (for example
+# /var/data/studyspring.db) to keep student work through service restarts.
+DATABASE_PATH = Path(os.getenv("STUDYSPRING_DATABASE_PATH", Path(__file__).with_name("studyspring.db")))
 
 
 @contextmanager
 def get_connection() -> sqlite3.Connection:
     """Yield a database connection, then commit and close it safely."""
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
     try:

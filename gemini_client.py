@@ -181,7 +181,7 @@ def split_question_source(notes: str, request_count: int) -> list[str]:
     return chunks
 
 
-def _generate_question_batch(api_key: str, notes: str, question_count: int) -> list[dict[str, object]]:
+def generate_question_batch(api_key: str, notes: str, question_count: int) -> list[dict[str, object]]:
     """Generate one small JSON question batch with a bounded response size."""
     genai, types = _gemini_modules()
     prompt = f'''Study material:
@@ -206,6 +206,22 @@ Return JSON only, with this exact shape:
     return parse_questions(response.text)
 
 
+def plan_question_batches(notes: str, question_count: int) -> list[tuple[str, int]]:
+    """Plan small, coherent requests without calling Gemini yet."""
+    if question_count < 1:
+        raise ValueError("Choose at least one question.")
+    minimum_batches = (question_count + MAX_QUESTIONS_PER_REQUEST - 1) // MAX_QUESTIONS_PER_REQUEST
+    source_chunks = split_question_source(notes, minimum_batches)
+    batch_count = max(minimum_batches, len(source_chunks))
+    source_chunks = split_question_source(notes, batch_count)
+    base_count, extra = divmod(question_count, len(source_chunks))
+    return [
+        (source_chunk, base_count + (1 if index < extra else 0))
+        for index, source_chunk in enumerate(source_chunks)
+        if base_count + (1 if index < extra else 0)
+    ]
+
+
 def generate_questions(
     api_key: str,
     notes: str,
@@ -213,29 +229,17 @@ def generate_questions(
     on_batch_complete: Callable[[list[dict[str, object]], int, int], None] | None = None,
 ) -> list[dict[str, object]]:
     """Generate larger quiz sets in small paced requests instead of one huge call."""
-    if question_count < 1:
-        raise ValueError("Choose at least one question.")
-    minimum_batches = (question_count + MAX_QUESTIONS_PER_REQUEST - 1) // MAX_QUESTIONS_PER_REQUEST
-    source_chunks = split_question_source(notes, minimum_batches)
-    # Give each coherent part a share of the requested questions.  The number
-    # of requests is also bounded by the source size, not only by the number of
-    # questions, so no request receives an oversized PDF excerpt.
-    batch_count = max(minimum_batches, len(source_chunks))
-    source_chunks = split_question_source(notes, batch_count)
-    base_count, extra = divmod(question_count, len(source_chunks))
-    batch_sizes = [base_count + (1 if index < extra else 0) for index in range(len(source_chunks))]
+    planned_batches = plan_question_batches(notes, question_count)
     generated: list[dict[str, object]] = []
-    for index, (batch_size, source_chunk) in enumerate(zip(batch_sizes, source_chunks)):
-        if batch_size == 0:
-            continue
+    for index, (source_chunk, batch_size) in enumerate(planned_batches):
         if index:
             time.sleep(QUESTION_REQUEST_INTERVAL_SECONDS)
         for quota_attempt in range(MAX_QUESTION_QUOTA_RETRIES + 1):
             try:
-                batch_questions = _generate_question_batch(api_key, source_chunk, batch_size)
+                batch_questions = generate_question_batch(api_key, source_chunk, batch_size)
                 generated.extend(batch_questions)
                 if on_batch_complete:
-                    on_batch_complete(batch_questions, index + 1, len(source_chunks))
+                    on_batch_complete(batch_questions, index + 1, len(planned_batches))
                 break
             except Exception as error:
                 if _is_quota_error(error) and quota_attempt < MAX_QUESTION_QUOTA_RETRIES:

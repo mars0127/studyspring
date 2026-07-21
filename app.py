@@ -1,6 +1,7 @@
 """StudySpring: a simple study dashboard built with Streamlit."""
 
 import csv
+import gc
 import math
 import os
 import random
@@ -44,8 +45,9 @@ from gemini_client import (
     DEFAULT_MODEL,
     create_gemini_client,
     extract_text_from_image,
+    generate_question_batch,
     grade_short_answer,
-    generate_questions,
+    plan_question_batches,
 )
 from course_starters import COURSE_STARTERS
 from pdf_import import (
@@ -61,6 +63,7 @@ from pdf_import import (
 MAX_SELECTED_SCANNED_PDF_PAGES = 120
 MAX_AI_SOURCE_CHARACTERS = 75_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
+APP_VERSION = "2026.07.21.3"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -253,6 +256,8 @@ def make_progress_csv(attempts: list[dict[str, object]]) -> str:
 
 st.title("🌱 StudySpring")
 st.subheader("Turn your notes into a clearer study plan.")
+deployed_commit = os.getenv("RENDER_GIT_COMMIT", "local")[:7]
+st.caption(f"Version {APP_VERSION} · build {deployed_commit}")
 
 import_status = st.session_state.pop("import_status", None)
 if import_status:
@@ -832,8 +837,14 @@ if study_notes:
                 selected_notes = note_options
                 st.info(f"This quiz will use all {len(selected_notes)} saved study material item(s).")
 
-            source_text, source_was_limited = prepare_ai_source(selected_notes, ai_note_label)
-            if selected_notes:
+            active_question_job = st.session_state.get(f"ai_question_job_{selected_course['id']}")
+            if active_question_job:
+                # The prepared chunks are already checkpointed in session state.
+                # Do not reload a long PDF note during each automatic batch rerun.
+                source_text, source_was_limited = "", False
+            else:
+                source_text, source_was_limited = prepare_ai_source(selected_notes, ai_note_label)
+            if selected_notes and not active_question_job:
                 st.caption(
                     f"Selected source: {len(selected_notes)} note(s), {len(source_text):,} characters."
                 )
@@ -867,43 +878,62 @@ if study_notes:
                     "Larger sets are generated in smaller safe AI requests. This can take a little longer, "
                     "but avoids one oversized request failing."
                 )
-            if st.button("Generate AI questions", width="stretch"):
-                generation_progress = {"saved_question_count": 0}
-
-                def save_question_batch(batch, completed_batch, total_batches):
-                    """Save each completed AI batch before asking Gemini again."""
-                    for generated_question in batch:
-                        create_quiz_question(
-                            selected_course["id"],
-                            generated_question["topic"],
-                            generated_question["question"],
-                            generated_question["options"],
-                            generated_question["correct_answer"],
-                            generated_question["explanation"],
-                        )
-                    generation_progress["saved_question_count"] += len(batch)
-
+            question_job_key = f"ai_question_job_{selected_course['id']}"
+            question_job = st.session_state.get(question_job_key)
+            if question_job:
+                batch_index = int(question_job["next_batch"])
+                planned_batches = question_job["batches"]
+                source_chunk, batch_size = planned_batches[batch_index]
+                try:
+                    with st.spinner(
+                        f"Creating question batch {batch_index + 1} of {len(planned_batches)}..."
+                    ):
+                        wait_seconds = float(question_job.get("next_request_after", 0)) - time.monotonic()
+                        if wait_seconds > 0:
+                            time.sleep(wait_seconds)
+                        batch_questions = generate_question_batch(api_key, source_chunk, batch_size)
+                        for generated_question in batch_questions:
+                            create_quiz_question(
+                                selected_course["id"],
+                                generated_question["topic"],
+                                generated_question["question"],
+                                generated_question["options"],
+                                generated_question["correct_answer"],
+                                generated_question["explanation"],
+                            )
+                    question_job["saved_count"] += len(batch_questions)
+                    question_job["next_batch"] = batch_index + 1
+                    question_job["next_request_after"] = time.monotonic() + 6
+                    del batch_questions
+                    gc.collect()
+                except Exception as error:
+                    st.warning(
+                        f"Saved {question_job['saved_count']} question(s). The next small AI batch paused: {error}"
+                    )
+                    if st.button("Continue question generation", width="stretch"):
+                        st.rerun()
+                else:
+                    if question_job["next_batch"] < len(planned_batches):
+                        st.session_state[question_job_key] = question_job
+                        st.rerun()
+                    else:
+                        st.session_state.pop(question_job_key, None)
+                        st.success(f"Saved {question_job['saved_count']} AI-generated question(s)!")
+                        st.session_state["open_practice_quiz"] = True
+                        st.rerun()
+            elif st.button("Generate AI questions", width="stretch"):
                 try:
                     if not selected_notes:
                         raise ValueError("Choose at least one study note first.")
-                    with st.spinner("Creating practice questions from your selected study material..."):
-                        generated_questions = generate_questions(
-                            api_key,
-                            source_text,
-                            question_count,
-                            on_batch_complete=save_question_batch,
-                        )
-                except Exception as error:
-                    if generation_progress["saved_question_count"]:
-                        st.warning(
-                            f"Saved {generation_progress['saved_question_count']} question(s), but the remaining batch could not finish: {error}"
-                        )
-                    else:
-                        st.error(f"We could not generate questions: {error}")
-                else:
-                    st.success(f"Saved {generation_progress['saved_question_count']} AI-generated question(s)!")
-                    st.session_state["open_practice_quiz"] = True
+                    st.session_state[question_job_key] = {
+                        "batches": plan_question_batches(source_text, question_count),
+                        "next_batch": 0,
+                        "saved_count": 0,
+                        "next_request_after": 0,
+                    }
                     st.rerun()
+                except Exception as error:
+                    st.error(f"We could not start question generation: {error}")
         else:
             st.warning("AI generation is not set up yet.")
             st.caption(

@@ -65,6 +65,18 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(note["title"], "Physics notes")
         self.assertEqual(note["content"], "Page 1\n\nPage 2")
 
+    def test_note_summaries_do_not_load_large_note_text(self) -> None:
+        database.create_course("Memory test", "Science", None)
+        course = database.list_courses()[0]
+        note_id = database.create_study_note(course["id"], "Large note", "A" * 200_000)
+
+        summary = database.list_study_notes(course["id"], include_content=False)[0]
+        full_note = database.get_study_note(note_id)
+
+        self.assertNotIn("content", summary.keys())
+        self.assertEqual(summary["content_length"], 200_000)
+        self.assertEqual(full_note["content"], "A" * 200_000)
+
 
 if __name__ == "__main__":
     unittest.main()

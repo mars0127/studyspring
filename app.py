@@ -836,6 +836,11 @@ if study_notes:
                 value=(recommended_minimum + recommended_maximum) // 2,
                 help="Longer sources need more questions to cover the important ideas without making one quiz overwhelming.",
             )
+            if question_count > 8:
+                st.caption(
+                    "Larger sets are generated in smaller safe AI requests. This can take a little longer, "
+                    "but avoids one oversized request failing."
+                )
             if st.button("Generate AI questions", width="stretch"):
                 try:
                     if not selected_notes:

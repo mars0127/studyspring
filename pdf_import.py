@@ -45,6 +45,12 @@ def is_unreadable_ocr_error(error: Exception) -> bool:
     )
 
 
+def is_ocr_quota_error(error: Exception) -> bool:
+    """Return whether the provider temporarily refused more OCR requests."""
+    message = str(error).lower()
+    return "resource_exhausted" in message or "quota exceeded" in message or " 429" in message
+
+
 def pdf_page_count(file_bytes: bytes) -> int:
     """Return a validated page count without rendering any page."""
     import fitz

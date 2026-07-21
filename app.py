@@ -45,17 +45,16 @@ from pdf_import import (
     is_unreadable_ocr_error,
     iter_pdf_pages,
     pdf_page_count,
-    split_textbook_sections,
 )
 
 
-MAX_SELECTED_SCANNED_PDF_PAGES = 30
+MAX_SELECTED_SCANNED_PDF_PAGES = 120
 MAX_AI_SOURCE_CHARACTERS = 75_000
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
 MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES = int(
-    os.getenv("AUTOMATIC_SCANNED_TEXTBOOK_MAX_PAGES", "30")
+    os.getenv("AUTOMATIC_SCANNED_TEXTBOOK_MAX_PAGES", "120")
 )
 
 
@@ -108,7 +107,7 @@ def validate_upload_size(uploaded_file, label: str, maximum_mb: int = MAX_TEXTBO
     if size > maximum_bytes:
         raise ValueError(
             f"{label} is {size / 1024 / 1024:.0f} MB. This hosted version safely accepts "
-            f"files up to {maximum_mb} MB. Split or compress the textbook into chapters, then import one chapter at a time."
+            f"files up to {maximum_mb} MB. Split or compress the PDF into smaller files, then import one at a time."
         )
 
 
@@ -148,7 +147,7 @@ def read_pdf_pages_for_import(
         except Exception as error:
             if is_ocr_quota_error(error):
                 # Keep reading locally-extractable pages and preserve a usable
-                # partial textbook. Retrying every following image would only
+                # partial study note. Retrying every following image would only
                 # repeat the same provider-limit failure.
                 ocr_pause_reason = "Gemini reached its temporary free-tier OCR request limit."
                 skipped_pages.append(page.number)
@@ -178,7 +177,17 @@ def prepare_ai_source(selected_notes: list[dict[str, object]], labeler) -> tuple
     for note in selected_notes:
         content = str(note["content"])
         if len(content) > allowance:
-            content = content[:allowance] + "\n[This chapter continues in StudySpring.]"
+            # Cover the beginning, middle, and end of one long PDF note rather
+            # than only sending its first pages to Gemini.
+            piece_count = min(6, max(2, len(content) // 12_000))
+            piece_size = max(1_000, allowance // piece_count)
+            positions = [
+                int(index * (len(content) - piece_size) / max(1, piece_count - 1))
+                for index in range(piece_count)
+            ]
+            content = "\n\n[Excerpt]\n".join(
+                content[position:position + piece_size] for position in positions
+            ) + "\n[Additional material is stored in StudySpring.]"
         sampled.append(f"--- {labeler(note)} ---\n{content}")
     return "\n\n".join(sampled)[:MAX_AI_SOURCE_CHARACTERS], True
 
@@ -371,17 +380,8 @@ st.subheader("Study notes")
 st.write("Add class notes, key facts, or a chapter summary. Quizzes will use these notes later.")
 
 with st.expander("Add study material", expanded=not study_notes):
-    material_section = st.radio(
-        "Material section",
-        ["Student notes & teacher material / lesson", "Course textbook"],
-        horizontal=True,
-        help="Keep day-to-day class material separate from the textbook used for the whole course.",
-    )
-    new_note_source_group = "textbook" if material_section == "Course textbook" else "lesson"
-    if new_note_source_group == "textbook":
-        st.caption("Add pages, chapters, or the complete textbook here. It can be used by itself or together with lessons in an AI quiz.")
-    else:
-        st.caption("Add your own notes, teacher handouts, slides, lesson text, or learning-platform material here.")
+    new_note_source_group = "lesson"
+    st.caption("Add your own notes, teacher handouts, slides, lesson text, or learning-platform material here.")
     material_type = st.selectbox(
         "What are you adding?",
         [
@@ -389,34 +389,29 @@ with st.expander("Add study material", expanded=not study_notes):
             "PDF with selectable text",
             "Photo or handwritten scan",
             "Pages from a scanned PDF",
-            "Scanned textbook chapter",
+            "Scanned PDF",
         ],
     )
     new_note_unit = ""
     new_note_chapter = ""
     new_note_lesson = ""
-    if new_note_source_group == "lesson":
-        organization_left, organization_middle, organization_right = st.columns(3)
-        new_note_unit = organization_left.text_input(
-            "Unit (optional)", placeholder="e.g. Unit 2: Skeletal system"
-        )
-        new_note_lesson = organization_right.text_input(
-            "Lesson (optional)", placeholder="e.g. Bone structure"
-        )
-        new_note_chapter = organization_middle.text_input(
-            "Chapter (optional)", placeholder="e.g. Chapter 3"
-        )
-    else:
-        st.info(
-            "Your textbook will be saved as one course-wide source. You do not need to sort a large textbook into units, chapters, or lessons."
-        )
+    organization_left, organization_middle, organization_right = st.columns(3)
+    new_note_unit = organization_left.text_input(
+        "Unit (optional)", placeholder="e.g. Unit 2: Skeletal system"
+    )
+    new_note_lesson = organization_right.text_input(
+        "Lesson (optional)", placeholder="e.g. Bone structure"
+    )
+    new_note_chapter = organization_middle.text_input(
+        "Chapter (optional)", placeholder="e.g. Chapter 3"
+    )
 
     if material_type == "Paste text":
         st.caption("Paste copied text from the material selected above.")
         with st.form("create_note_form", clear_on_submit=True):
             note_title = st.text_input(
-                "Textbook name" if new_note_source_group == "textbook" else "Title",
-                placeholder="e.g. Grade 12 Kinesiology textbook" if new_note_source_group == "textbook" else "e.g. Cell division chapter",
+                "Title",
+                placeholder="e.g. Cell division chapter",
             )
             note_content = st.text_area("Text", placeholder="Paste the text here...", height=180)
             saved_note = st.form_submit_button("Save material", width="stretch")
@@ -517,13 +512,13 @@ with st.expander("Add study material", expanded=not study_notes):
 
     else:
         st.caption(
-            f"For server safety, scanned textbook imports are limited to {MAX_TEXTBOOK_UPLOAD_MB} MB and "
-            f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time. Split a larger textbook into chapters first."
+            f"Scanned PDFs can be up to {MAX_TEXTBOOK_UPLOAD_MB} MB and "
+            f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages. The entire import is saved as one study note."
         )
         with st.form("scan_entire_pdf_form", clear_on_submit=True):
-            entire_pdf = st.file_uploader("Choose one scanned textbook chapter", type=["pdf"], key="entire_pdf")
+            entire_pdf = st.file_uploader("Choose a scanned PDF", type=["pdf"], key="entire_pdf")
             confirmed = st.checkbox("I understand image-only pages may be skipped if the free AI limit is reached.")
-            start_full_scan = st.form_submit_button("Scan this textbook chapter", width="stretch")
+            start_full_scan = st.form_submit_button("Scan and save PDF", width="stretch")
         if start_full_scan:
             api_key = gemini_api_key()
             saved_sections = 0
@@ -532,31 +527,29 @@ with st.expander("Add study material", expanded=not study_notes):
                     raise ValueError("Check the confirmation box before starting the full scan.")
                 if entire_pdf is None:
                     raise ValueError("Choose a scanned PDF before continuing.")
-                validate_upload_size(entire_pdf, "This textbook")
+                validate_upload_size(entire_pdf, "This PDF")
                 pdf_bytes = entire_pdf.getvalue()
                 total_pages = pdf_page_count(pdf_bytes)
                 if total_pages > MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES:
                     raise ValueError(
                         f"This chapter has {total_pages} pages. The hosted scanner safely handles up to "
-                        f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time. Split it into smaller chapters or ranges first."
+                        f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time. Split it into smaller ranges first."
                     )
                 progress = st.progress(0, text="Preparing full-PDF scan...")
                 pages, skipped_pages, ocr_pause_reason = read_pdf_pages_for_import(
                     pdf_bytes, 1, total_pages, api_key, progress
                 )
-                sections = split_textbook_sections(pages)
-                progress.progress(1.0, text="Saving textbook sections...")
-                for section in sections:
-                    create_study_note(
-                        selected_course["id"],
-                        f"{entire_pdf.name.rsplit('.', 1)[0]} — {section.title}",
-                        section.text,
-                        new_note_unit or section.title,
-                        new_note_lesson,
-                        new_note_chapter or f"Pages {section.first_page}-{section.last_page}",
-                        new_note_source_group,
-                    )
-                    saved_sections += 1
+                progress.progress(1.0, text="Saving your study note...")
+                create_study_note(
+                    selected_course["id"],
+                    entire_pdf.name.rsplit('.', 1)[0],
+                    "\n\n".join(text for _, text in pages),
+                    new_note_unit,
+                    new_note_lesson,
+                    new_note_chapter,
+                    new_note_source_group,
+                )
+                saved_sections = 1
             except Exception as error:
                 if "WinError 10013" in str(error):
                     st.error(
@@ -569,7 +562,7 @@ with st.expander("Add study material", expanded=not study_notes):
                         "Any saved sections are still available in your study material."
                     )
             else:
-                summary = f"Finished reading {total_pages} pages into {saved_sections} organized textbook section(s)!"
+                summary = f"Finished reading {total_pages} pages into one saved study note!"
                 if skipped_pages:
                     st.warning(
                         f"{summary} Image-only or unreadable page(s) were skipped: "
@@ -599,10 +592,6 @@ if len(study_notes) >= 2:
             combined_unit = combine_left.text_input("Unit")
             combined_chapter = combine_middle.text_input("Chapter")
             combined_lesson = combine_right.text_input("Lesson")
-            combined_section = st.selectbox(
-                "Save combined material in",
-                ["Student notes & teacher material / lesson", "Course textbook"],
-            )
             remove_originals = st.checkbox("Remove the original notes after combining them")
             combine_notes = st.form_submit_button("Combine selected notes", width="stretch")
         if combine_notes:
@@ -620,7 +609,7 @@ if len(study_notes) >= 2:
                     combined_unit,
                     combined_lesson,
                     combined_chapter,
-                    "textbook" if combined_section == "Course textbook" else "lesson",
+                    "lesson",
                 )
                 if remove_originals:
                     for note_id in selected_note_ids:
@@ -634,19 +623,12 @@ if len(study_notes) >= 2:
 if study_notes:
     available_units = sorted({note["unit"] for note in study_notes if note["unit"]})
     available_chapters = sorted({note["chapter"] for note in study_notes if note["chapter"]})
-    filter_left, filter_middle, filter_right = st.columns(3)
-    section_filter = filter_left.selectbox(
-        "View material section",
-        ["All material", "Student notes & teacher material / lesson", "Course textbook"],
-    )
-    unit_filter = filter_middle.selectbox("View notes by unit", ["All units", "Unsorted"] + available_units)
+    filter_left, filter_right = st.columns(2)
+    unit_filter = filter_left.selectbox("View notes by unit", ["All units", "Unsorted"] + available_units)
     chapter_filter = filter_right.selectbox("View notes by chapter", ["All chapters", "Unsorted"] + available_chapters)
     visible_notes = [
         note for note in study_notes
-        if (section_filter == "All material"
-            or (section_filter == "Course textbook" and note["source_group"] == "textbook")
-            or (section_filter == "Student notes & teacher material / lesson" and note["source_group"] != "textbook"))
-        and (unit_filter == "All units" or (unit_filter == "Unsorted" and not note["unit"]) or note["unit"] == unit_filter)
+        if (unit_filter == "All units" or (unit_filter == "Unsorted" and not note["unit"]) or note["unit"] == unit_filter)
         and (chapter_filter == "All chapters" or (chapter_filter == "Unsorted" and not note["chapter"]) or note["chapter"] == chapter_filter)
     ]
     visible_notes.sort(key=lambda note: (note["unit"], note["chapter"], note["lesson"], note["title"]))
@@ -663,19 +645,13 @@ if study_notes:
                 updated_unit = organization_left.text_input("Unit", value=note["unit"], key=f"note_unit_{note['id']}")
                 updated_chapter = organization_middle.text_input("Chapter", value=note["chapter"], key=f"note_chapter_{note['id']}")
                 updated_lesson = organization_right.text_input("Lesson", value=note["lesson"], key=f"note_lesson_{note['id']}")
-                updated_section = st.selectbox(
-                    "Material section",
-                    ["Student notes & teacher material / lesson", "Course textbook"],
-                    index=1 if note["source_group"] == "textbook" else 0,
-                    key=f"note_section_{note['id']}",
-                )
                 save_note = st.form_submit_button("Save note changes")
             if save_note:
                 try:
                     update_study_note(
                         note["id"], updated_title, updated_content,
                         updated_unit, updated_chapter, updated_lesson,
-                        "textbook" if updated_section == "Course textbook" else "lesson",
+                        "lesson",
                     )
                 except ValueError as error:
                     st.error(str(error))
@@ -746,16 +722,9 @@ if study_notes:
 
             source_scope = st.radio(
                 "Quiz source",
-                [
-                    "Student notes & teacher material / lesson",
-                    "Course textbook",
-                    "Combine both sections",
-                    "Choose specific materials",
-                ],
+                ["All saved material", "Choose specific materials"],
                 horizontal=True,
             )
-            lesson_notes = [note for note in note_options if note.get("source_group") != "textbook"]
-            textbook_notes = [note for note in note_options if note.get("source_group") == "textbook"]
             if source_scope == "Choose specific materials":
                 selected_notes = st.multiselect(
                     "Choose one or more materials",
@@ -763,17 +732,9 @@ if study_notes:
                     format_func=ai_note_label,
                     key="ai_note_selector",
                 )
-            elif source_scope == "Student notes & teacher material / lesson":
-                selected_notes = lesson_notes
-                st.info(f"This quiz will use {len(selected_notes)} saved student/teacher material item(s).")
-            elif source_scope == "Course textbook":
-                selected_notes = textbook_notes
-                st.info(f"This quiz will use {len(selected_notes)} saved textbook item(s).")
             else:
                 selected_notes = note_options
-                st.info(
-                    f"This quiz will combine {len(lesson_notes)} lesson item(s) with {len(textbook_notes)} textbook item(s)."
-                )
+                st.info(f"This quiz will use all {len(selected_notes)} saved study material item(s).")
 
             source_text, source_was_limited = prepare_ai_source(selected_notes, ai_note_label)
             if selected_notes:
@@ -782,8 +743,8 @@ if study_notes:
                 )
             if source_was_limited:
                 st.info(
-                    "This textbook is larger than one safe AI request. StudySpring is using a "
-                    "balanced sample from each selected chapter. Choose specific chapters for a "
+                    "This material is larger than one safe AI request. StudySpring is using a "
+                    "balanced sample from across the selected notes. Choose specific notes for a "
                     "more focused quiz."
                 )
             source_length = len(source_text)

@@ -17,6 +17,6 @@ AI-generated quizzes are planned after this core version works. The current manu
 
 ## Hosted deployment safety
 
-The Render free tier has limited memory and no durable local disk by default. This app therefore rejects textbook uploads larger than 40 MB and scanned textbook chapters longer than 30 pages before processing them. Split a large textbook into chapter PDFs and import the chapters separately.
+The Render free tier has limited memory and no durable local disk by default. This app therefore rejects PDF uploads larger than 40 MB and scanned PDFs longer than 120 pages before processing them. Split a larger PDF into smaller files and import them separately.
 
 For a real public deployment, attach durable storage and set `STUDYSPRING_DATABASE_PATH` to its database-file path (for example `/var/data/studyspring.db`). Without durable storage, a service restart can erase the local SQLite database, including courses and notes.

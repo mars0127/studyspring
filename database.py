@@ -301,18 +301,32 @@ def rename_study_note(note_id: int, title: str) -> None:
         connection.execute("UPDATE study_notes SET title = ? WHERE id = ?", (clean_title, note_id))
 
 
-def list_study_notes(course_id: int) -> list[sqlite3.Row]:
-    """Return the saved notes for one course, newest first."""
+def list_study_notes(course_id: int, include_content: bool = True) -> list[sqlite3.Row]:
+    """Return saved notes, optionally without loading their potentially large text."""
+    content_column = "content," if include_content else "length(content) AS content_length,"
     with get_connection() as connection:
         return connection.execute(
-            """
-            SELECT id, title, content, unit, chapter, lesson, source_group, created_at
+            f"""
+            SELECT id, title, {content_column} unit, chapter, lesson, source_group, created_at
             FROM study_notes
             WHERE course_id = ?
             ORDER BY id DESC
             """,
             (course_id,),
         ).fetchall()
+
+
+def get_study_note(note_id: int) -> sqlite3.Row | None:
+    """Load one note's full text only when the student opens or uses it."""
+    with get_connection() as connection:
+        return connection.execute(
+            """
+            SELECT id, title, content, unit, chapter, lesson, source_group, created_at
+            FROM study_notes
+            WHERE id = ?
+            """,
+            (note_id,),
+        ).fetchone()
 
 
 def update_study_note_organization(note_id: int, unit: str, chapter: str, lesson: str) -> None:

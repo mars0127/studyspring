@@ -25,6 +25,7 @@ from database import (
     course_topic_stats,
     delete_course,
     delete_study_note,
+    get_study_note,
     initialize_database,
     list_courses,
     list_flashcards,
@@ -59,6 +60,7 @@ from pdf_import import (
 
 MAX_SELECTED_SCANNED_PDF_PAGES = 120
 MAX_AI_SOURCE_CHARACTERS = 75_000
+MAX_NOTE_EDITOR_CHARACTERS = 120_000
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -203,18 +205,17 @@ def read_pdf_pages_for_import(
 
 
 def prepare_ai_source(selected_notes: list[dict[str, object]], labeler) -> tuple[str, bool]:
-    """Keep AI quiz prompts bounded while sampling every selected chapter fairly."""
+    """Keep AI prompts bounded without keeping every saved note in memory."""
     if not selected_notes:
         return "", False
-    raw_text = "\n\n".join(
-        f"--- {labeler(note)} ---\n{note['content']}" for note in selected_notes
-    )
-    if len(raw_text) <= MAX_AI_SOURCE_CHARACTERS:
-        return raw_text, False
+    total_source_length = sum(int(note.get("content_length", len(str(note.get("content", ""))))) for note in selected_notes)
     allowance = max(2_000, MAX_AI_SOURCE_CHARACTERS // len(selected_notes))
     sampled = []
     for note in selected_notes:
-        content = str(note["content"])
+        content = str(note.get("content", ""))
+        if not content:
+            loaded_note = get_study_note(int(note["id"]))
+            content = str(loaded_note["content"]) if loaded_note else ""
         if len(content) > allowance:
             # Cover the beginning, middle, and end of one long PDF note rather
             # than only sending its first pages to Gemini.
@@ -228,7 +229,7 @@ def prepare_ai_source(selected_notes: list[dict[str, object]], labeler) -> tuple
                 content[position:position + piece_size] for position in positions
             ) + "\n[Additional material is stored in StudySpring.]"
         sampled.append(f"--- {labeler(note)} ---\n{content}")
-    return "\n\n".join(sampled)[:MAX_AI_SOURCE_CHARACTERS], True
+    return "\n\n".join(sampled)[:MAX_AI_SOURCE_CHARACTERS], total_source_length > MAX_AI_SOURCE_CHARACTERS
 
 
 def make_progress_csv(attempts: list[dict[str, object]]) -> str:
@@ -365,7 +366,7 @@ with st.expander("Course settings"):
             st.rerun()
 
 left_column, middle_column, right_column = st.columns(3)
-study_notes = list_study_notes(selected_course["id"])
+study_notes = list_study_notes(selected_course["id"], include_content=False)
 flashcards = list_flashcards(selected_course["id"])
 quiz_questions = list_quiz_questions(selected_course["id"])
 attempt_count, average_score = course_quiz_stats(selected_course["id"])
@@ -669,7 +670,7 @@ if len(study_notes) >= 2:
                 if len(selected_note_ids) < 2:
                     raise ValueError("Choose at least two notes to combine.")
                 combined_content = "\n\n".join(
-                    f"--- {note_by_id[note_id]['title']} ---\n{note_by_id[note_id]['content']}"
+                    f"--- {note_by_id[note_id]['title']} ---\n{get_study_note(note_id)['content']}"
                     for note_id in selected_note_ids
                 )
                 create_study_note(
@@ -702,15 +703,40 @@ if study_notes:
         and (chapter_filter == "All chapters" or (chapter_filter == "Unsorted" and not note["chapter"]) or note["chapter"] == chapter_filter)
     ]
     visible_notes.sort(key=lambda note: (note["unit"], note["chapter"], note["lesson"], note["title"]))
+    selected_note_id = None
+    if visible_notes:
+        selected_note_id = st.selectbox(
+            "Open study material",
+            [note["id"] for note in visible_notes],
+            format_func=lambda note_id: next(note["title"] for note in visible_notes if note["id"] == note_id),
+        )
+    else:
+        st.info("No study material matches these filters.")
     for note in visible_notes:
+        if note["id"] != selected_note_id:
+            continue
+        note = get_study_note(int(note["id"]))
+        if note is None:
+            continue
         location = " · ".join(item for item in [note["unit"], note["chapter"], note["lesson"]] if item)
         note_heading = f"{location} — {note['title']}" if location else note["title"]
         with st.expander(note_heading):
-            st.write(note["content"])
+            if len(note["content"]) > MAX_NOTE_EDITOR_CHARACTERS:
+                st.caption(
+                    "This large imported note is shown as a preview to keep the hosted app stable. "
+                    "Its complete text remains saved for AI generation."
+                )
+                st.text(note["content"][:10_000] + "\n\n[Preview ends here]")
+            else:
+                st.write(note["content"])
             st.caption("Edit the title, content, or organization below.")
             with st.form(f"edit_note_{note['id']}"):
                 updated_title = st.text_input("Note title", value=note["title"], key=f"note_title_{note['id']}")
-                updated_content = st.text_area("Note content", value=note["content"], height=180, key=f"note_content_{note['id']}")
+                if len(note["content"]) <= MAX_NOTE_EDITOR_CHARACTERS:
+                    updated_content = st.text_area("Note content", value=note["content"], height=180, key=f"note_content_{note['id']}")
+                else:
+                    updated_content = note["content"]
+                    st.info("Full-text editing is unavailable for this large imported note. You can still rename and organize it.")
                 organization_left, organization_middle, organization_right = st.columns(3)
                 updated_unit = organization_left.text_input("Unit", value=note["unit"], key=f"note_unit_{note['id']}")
                 updated_chapter = organization_middle.text_input("Chapter", value=note["chapter"], key=f"note_chapter_{note['id']}")

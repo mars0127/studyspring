@@ -63,7 +63,7 @@ from pdf_import import (
 MAX_SELECTED_SCANNED_PDF_PAGES = 120
 MAX_AI_SOURCE_CHARACTERS = 75_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
-APP_VERSION = "2026.07.21.3"
+APP_VERSION = "2026.07.21.4"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -809,6 +809,7 @@ st.write("Create questions now, then practise them in the quiz below.")
 
 if study_notes:
     with st.expander("Generate questions from notes with AI"):
+        st.markdown("#### 1. Build your question bank")
         st.caption(
             "Choose one note, several notes, or every note in this course. Only those chosen notes are sent to Google Gemini."
         )
@@ -864,14 +865,16 @@ if study_notes:
             else:
                 recommended_minimum, recommended_maximum = 15, 25
             st.caption(
-                f"Recommended for this amount of material: **{recommended_minimum}-{recommended_maximum} questions**."
+                f"Recommended for this material: **{recommended_minimum}-{recommended_maximum} questions**. "
+                "This is a suggestion, not a requirement."
             )
-            question_count = st.slider(
-                "How many practice questions do you want?",
-                min_value=recommended_minimum,
+            question_count = st.number_input(
+                "Questions to add to your question bank",
+                min_value=0,
                 max_value=recommended_maximum,
                 value=(recommended_minimum + recommended_maximum) // 2,
-                help="Longer sources need more questions to cover the important ideas without making one quiz overwhelming.",
+                step=1,
+                help="Choose any amount from zero up to the safe maximum for this material. You can choose how many saved questions to practise afterwards.",
             )
             if question_count > 8:
                 st.caption(
@@ -921,7 +924,7 @@ if study_notes:
                         st.success(f"Saved {question_job['saved_count']} AI-generated question(s)!")
                         st.session_state["open_practice_quiz"] = True
                         st.rerun()
-            elif st.button("Generate AI questions", width="stretch"):
+            elif st.button("Generate AI questions", width="stretch", disabled=question_count == 0):
                 try:
                     if not selected_notes:
                         raise ValueError("Choose at least one study note first.")
@@ -1102,8 +1105,8 @@ else:
                     f"**{session['score']}/{session['total_questions']}** · {topics} · {session['completed_at']}"
                 )
 
-    with st.expander(
-        "Take a practice quiz",
+with st.expander(
+        "2. Take a practice quiz from your saved question bank",
         expanded=bool(st.session_state.pop("open_practice_quiz", False)),
     ):
         all_topics = sorted({str(question["topic"]) for question in quiz_questions})
@@ -1145,12 +1148,16 @@ else:
                 st.caption("Answer a few quizzes first; then adaptive review will learn your weaker topics.")
 
         maximum_quiz_size = min(15, len(quiz_candidates))
-        quiz_size = st.slider(
-            "Questions in this quiz",
-            min_value=1,
-            max_value=maximum_quiz_size,
-            value=min(5, maximum_quiz_size),
-        )
+        if maximum_quiz_size == 1:
+            quiz_size = 1
+            st.caption("This selection currently has 1 saved question.")
+        else:
+            quiz_size = st.slider(
+                "Questions to use from your saved question bank",
+                min_value=1,
+                max_value=maximum_quiz_size,
+                value=min(5, maximum_quiz_size),
+            )
         active_quiz_questions = quiz_candidates[:quiz_size]
 
         with st.form("take_quiz_form"):

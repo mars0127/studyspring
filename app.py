@@ -49,11 +49,14 @@ from pdf_import import (
 )
 
 
-MAX_SELECTED_SCANNED_PDF_PAGES = 100
+MAX_SELECTED_SCANNED_PDF_PAGES = 30
 MAX_AI_SOURCE_CHARACTERS = 75_000
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
+MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES = int(
+    os.getenv("AUTOMATIC_SCANNED_TEXTBOOK_MAX_PAGES", "30")
+)
 
 
 st.set_page_config(page_title="StudySpring", page_icon="🌱", layout="wide")
@@ -386,7 +389,7 @@ with st.expander("Add study material", expanded=not study_notes):
             "PDF with selectable text",
             "Photo or handwritten scan",
             "Pages from a scanned PDF",
-            "Entire scanned PDF automatically",
+            "Scanned textbook chapter",
         ],
     )
     new_note_unit = ""
@@ -514,13 +517,13 @@ with st.expander("Add study material", expanded=not study_notes):
 
     else:
         st.caption(
-            f"For server safety, full textbook uploads are limited to {MAX_TEXTBOOK_UPLOAD_MB} MB. "
-            "Split a larger book into chapters first. StudySpring then saves each chapter/unit as a separate source."
+            f"For server safety, scanned textbook imports are limited to {MAX_TEXTBOOK_UPLOAD_MB} MB and "
+            f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time. Split a larger textbook into chapters first."
         )
         with st.form("scan_entire_pdf_form", clear_on_submit=True):
-            entire_pdf = st.file_uploader("Choose the full scanned PDF", type=["pdf"], key="entire_pdf")
-            confirmed = st.checkbox("I understand this can take a long time and use many Gemini requests.")
-            start_full_scan = st.form_submit_button("Scan entire PDF automatically", width="stretch")
+            entire_pdf = st.file_uploader("Choose one scanned textbook chapter", type=["pdf"], key="entire_pdf")
+            confirmed = st.checkbox("I understand image-only pages may be skipped if the free AI limit is reached.")
+            start_full_scan = st.form_submit_button("Scan this textbook chapter", width="stretch")
         if start_full_scan:
             api_key = gemini_api_key()
             saved_sections = 0
@@ -532,6 +535,11 @@ with st.expander("Add study material", expanded=not study_notes):
                 validate_upload_size(entire_pdf, "This textbook")
                 pdf_bytes = entire_pdf.getvalue()
                 total_pages = pdf_page_count(pdf_bytes)
+                if total_pages > MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES:
+                    raise ValueError(
+                        f"This chapter has {total_pages} pages. The hosted scanner safely handles up to "
+                        f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time. Split it into smaller chapters or ranges first."
+                    )
                 progress = st.progress(0, text="Preparing full-PDF scan...")
                 pages, skipped_pages, ocr_pause_reason = read_pdf_pages_for_import(
                     pdf_bytes, 1, total_pages, api_key, progress

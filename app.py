@@ -4,9 +4,12 @@ import csv
 import math
 import os
 import random
+import shutil
+import tempfile
 import time
 from datetime import date
 from io import BytesIO, StringIO
+from pathlib import Path
 
 import streamlit as st
 from pypdf import PdfReader
@@ -48,7 +51,9 @@ from pdf_import import (
     is_ocr_quota_error,
     is_unreadable_ocr_error,
     iter_pdf_pages,
+    iter_pdf_pages_from_path,
     pdf_page_count,
+    pdf_page_count_from_path,
 )
 
 
@@ -121,8 +126,16 @@ def validate_upload_size(uploaded_file, label: str, maximum_mb: int = MAX_TEXTBO
         )
 
 
+def save_uploaded_pdf_to_temp(uploaded_file) -> Path:
+    """Keep one uploaded PDF on disk during a multi-batch scan, not in session memory."""
+    with tempfile.NamedTemporaryFile(prefix="studyspring-scan-", suffix=".pdf", delete=False) as temp_file:
+        uploaded_file.seek(0)
+        shutil.copyfileobj(uploaded_file, temp_file, length=1024 * 1024)
+        return Path(temp_file.name)
+
+
 def read_pdf_pages_for_import(
-    file_bytes: bytes,
+    pdf_source: bytes | Path,
     first_page: int,
     last_page: int,
     api_key: str | None,
@@ -134,7 +147,12 @@ def read_pdf_pages_for_import(
     skipped_pages: list[int] = []
     client = None
     last_ocr_request_at = 0.0
-    for completed, page in enumerate(iter_pdf_pages(file_bytes, first_page, last_page), start=1):
+    page_iterator = (
+        iter_pdf_pages_from_path(pdf_source, first_page, last_page)
+        if isinstance(pdf_source, Path)
+        else iter_pdf_pages(pdf_source, first_page, last_page)
+    )
+    for completed, page in enumerate(page_iterator, start=1):
         progress.progress(
             (completed - 1) / total_pages,
             text=f"Reading page {page.number} of {last_page}...",
@@ -555,9 +573,10 @@ with st.expander("Add study material", expanded=not study_notes):
                 if entire_pdf is None:
                     raise ValueError("Choose a scanned PDF before continuing.")
                 validate_upload_size(entire_pdf, "This PDF")
-                pdf_bytes = entire_pdf.getvalue()
-                total_pages = pdf_page_count(pdf_bytes)
+                pdf_path = save_uploaded_pdf_to_temp(entire_pdf)
+                total_pages = pdf_page_count_from_path(pdf_path)
                 if total_pages > MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES:
+                    pdf_path.unlink(missing_ok=True)
                     raise ValueError(
                         f"This PDF has {total_pages} pages. The hosted scanner safely handles up to "
                         f"{MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES} pages at a time."
@@ -573,7 +592,7 @@ with st.expander("Add study material", expanded=not study_notes):
                     new_note_source_group,
                 )
                 st.session_state[scan_job_key] = {
-                    "bytes": pdf_bytes,
+                    "path": str(pdf_path),
                     "title": final_title,
                     "note_id": note_id,
                     "total_pages": total_pages,
@@ -596,7 +615,7 @@ with st.expander("Add study material", expanded=not study_notes):
             )
             try:
                 pages, skipped_pages, _ = read_pdf_pages_for_import(
-                    scan_job["bytes"], batch_first, batch_last, gemini_api_key(), progress
+                    Path(str(scan_job["path"])), batch_first, batch_last, gemini_api_key(), progress
                 )
                 batch_text = "\n\n".join(text for _, text in pages)
                 if batch_first == 1:
@@ -619,6 +638,7 @@ with st.expander("Add study material", expanded=not study_notes):
                     st.rerun()
                 else:
                     rename_study_note(int(scan_job["note_id"]), str(scan_job["title"]))
+                    Path(str(scan_job["path"])).unlink(missing_ok=True)
                     skipped = scan_job["skipped_pages"]
                     message = f"Finished reading {scan_job['total_pages']} pages into one saved study note!"
                     if skipped:

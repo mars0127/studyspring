@@ -51,6 +51,9 @@ from pdf_import import (
 
 MAX_SELECTED_SCANNED_PDF_PAGES = 100
 MAX_AI_SOURCE_CHARACTERS = 75_000
+# Render's free instances have limited memory. A larger file can be held more
+# than once while Streamlit and PyMuPDF inspect it, which can restart the app.
+MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
 
 
 st.set_page_config(page_title="StudySpring", page_icon="🌱", layout="wide")
@@ -93,6 +96,17 @@ def extract_pdf_text(file_bytes: bytes) -> str:
     """Extract readable text from a text-based PDF upload."""
     reader = PdfReader(BytesIO(file_bytes))
     return "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
+
+
+def validate_upload_size(uploaded_file, label: str, maximum_mb: int = MAX_TEXTBOOK_UPLOAD_MB) -> None:
+    """Reject unsafe uploads before copying their bytes into application memory."""
+    size = int(getattr(uploaded_file, "size", 0) or 0)
+    maximum_bytes = maximum_mb * 1024 * 1024
+    if size > maximum_bytes:
+        raise ValueError(
+            f"{label} is {size / 1024 / 1024:.0f} MB. This hosted version safely accepts "
+            f"files up to {maximum_mb} MB. Split or compress the textbook into chapters, then import one chapter at a time."
+        )
 
 
 def read_pdf_pages_for_import(
@@ -500,8 +514,8 @@ with st.expander("Add study material", expanded=not study_notes):
 
     else:
         st.caption(
-            "Best for a whole textbook. StudySpring reads one page at a time, then saves "
-            "separate chapter/unit-sized sources so AI quizzes never need the whole book at once."
+            f"For server safety, full textbook uploads are limited to {MAX_TEXTBOOK_UPLOAD_MB} MB. "
+            "Split a larger book into chapters first. StudySpring then saves each chapter/unit as a separate source."
         )
         with st.form("scan_entire_pdf_form", clear_on_submit=True):
             entire_pdf = st.file_uploader("Choose the full scanned PDF", type=["pdf"], key="entire_pdf")
@@ -515,6 +529,7 @@ with st.expander("Add study material", expanded=not study_notes):
                     raise ValueError("Check the confirmation box before starting the full scan.")
                 if entire_pdf is None:
                     raise ValueError("Choose a scanned PDF before continuing.")
+                validate_upload_size(entire_pdf, "This textbook")
                 pdf_bytes = entire_pdf.getvalue()
                 total_pages = pdf_page_count(pdf_bytes)
                 progress = st.progress(0, text="Preparing full-PDF scan...")
@@ -803,6 +818,7 @@ if study_notes:
                     st.error(f"We could not generate questions: {error}")
                 else:
                     st.success(f"Saved {len(generated_questions)} AI-generated question(s)!")
+                    st.session_state["open_practice_quiz"] = True
                     st.rerun()
         else:
             st.warning("AI generation is not set up yet.")
@@ -868,118 +884,14 @@ with st.expander("Create a practice question", expanded=not quiz_questions):
             st.success("Practice question saved!")
             st.rerun()
 
-assessment_questions = quiz_questions
 multiple_choice_test_questions = [
-    question for question in assessment_questions
+    question for question in quiz_questions
     if question.get("question_type", "multiple_choice") == "multiple_choice"
 ]
 short_answer_test_questions = [
-    question for question in assessment_questions
+    question for question in quiz_questions
     if question.get("question_type") == "short_answer"
 ]
-
-if assessment_questions:
-    with st.expander("Take a mock test", expanded=False):
-        st.caption(
-            "Practise a test-like mix of multiple-choice and short-answer questions. "
-            "Short answers show a marking guide after you submit so you can compare your work."
-        )
-        test_left, test_right = st.columns(2)
-        mc_count = test_left.slider(
-            "Multiple-choice questions",
-            min_value=0,
-            max_value=min(20, len(multiple_choice_test_questions)),
-            value=min(5, len(multiple_choice_test_questions)),
-            key="mock_test_mc_count",
-        ) if multiple_choice_test_questions else 0
-        short_count = test_right.slider(
-            "Short-answer questions",
-            min_value=0,
-            max_value=min(10, len(short_answer_test_questions)),
-            value=min(2, len(short_answer_test_questions)),
-            key="mock_test_short_count",
-        ) if short_answer_test_questions else 0
-        if not short_answer_test_questions:
-            st.info("Add short-answer questions above to include Thinking, Communication, or Application practice in a mock test.")
-
-        active_test_questions = (
-            multiple_choice_test_questions[:mc_count]
-            + short_answer_test_questions[:short_count]
-        )
-        if active_test_questions:
-            with st.form("take_mock_test_form"):
-                test_answers: dict[int, str | None] = {}
-                for number, question in enumerate(active_test_questions, start=1):
-                    st.markdown(f"**{number}. {question['question']}**")
-                    st.caption(
-                        f"{question.get('achievement_category', 'Knowledge & Understanding')} "
-                        f"· {question.get('marks', 1)} mark(s) · {question['topic']}"
-                    )
-                    if question.get("question_type", "multiple_choice") == "short_answer":
-                        test_answers[question["id"]] = st.text_area(
-                            "Your response",
-                            key=f"mock_short_answer_{question['id']}",
-                            height=140,
-                        )
-                    else:
-                        test_answers[question["id"]] = st.radio(
-                            "Choose an answer",
-                            question["options"],
-                            index=None,
-                            key=f"mock_mc_answer_{question['id']}",
-                        )
-                submitted_test = st.form_submit_button("Finish mock test", width="stretch")
-
-            if submitted_test:
-                if any(not answer for answer in test_answers.values()):
-                    st.error("Answer every question before finishing the test.")
-                else:
-                    auto_score = 0
-                    auto_total = 0
-                    test_feedback = []
-                    for question in active_test_questions:
-                        response = str(test_answers[question["id"]])
-                        is_short_answer = question.get("question_type") == "short_answer"
-                        if is_short_answer:
-                            correct = None
-                        else:
-                            correct = response == question["correct_answer"]
-                            auto_total += int(question.get("marks", 1))
-                            auto_score += int(question.get("marks", 1)) if correct else 0
-                            record_quiz_attempt(question["id"], response, bool(correct))
-                        test_feedback.append({
-                            "question": question["question"],
-                            "response": response,
-                            "correct": correct,
-                            "answer": question.get("sample_answer") or question["correct_answer"],
-                            "category": question.get("achievement_category", "Knowledge & Understanding"),
-                            "marks": question.get("marks", 1),
-                            "explanation": question.get("explanation", ""),
-                        })
-                    if auto_total:
-                        record_quiz_session(
-                            selected_course["id"], auto_score, auto_total,
-                            [str(question["topic"]) for question in active_test_questions],
-                        )
-                    st.session_state["latest_mock_test_result"] = (auto_score, auto_total, test_feedback)
-                    st.rerun()
-
-    if "latest_mock_test_result" in st.session_state:
-        auto_score, auto_total, test_feedback = st.session_state.pop("latest_mock_test_result")
-        if auto_total:
-            st.success(f"Mock test complete: {auto_score}/{auto_total} automatically marked multiple-choice marks.")
-        else:
-            st.success("Mock test complete. Compare your short answers with the marking guide below.")
-        with st.expander("Review mock test", expanded=True):
-            for item in test_feedback:
-                st.markdown(f"**{item['category']} · {item['marks']} mark(s): {item['question']}**")
-                st.write(f"Your response: {item['response']}")
-                if item["correct"] is False:
-                    st.write(f"Correct answer: {item['answer']}")
-                elif item["correct"] is None:
-                    st.write(f"Sample answer / marking guide: {item['answer']}")
-                if item["explanation"]:
-                    st.caption(item["explanation"])
 
 # Short-answer practice is separate from the multiple-choice quiz and uses AI feedback.
 if short_answer_test_questions:
@@ -1076,7 +988,10 @@ else:
                     f"**{session['score']}/{session['total_questions']}** · {topics} · {session['completed_at']}"
                 )
 
-    with st.expander("Take a practice quiz", expanded=False):
+    with st.expander(
+        "Take a practice quiz",
+        expanded=bool(st.session_state.pop("open_practice_quiz", False)),
+    ):
         all_topics = sorted({str(question["topic"]) for question in quiz_questions})
         quiz_style = st.radio(
             "Quiz type",
@@ -1194,7 +1109,8 @@ if attempt_history:
 st.divider()
 with st.expander("About StudySpring and your privacy"):
     st.write(
-        "StudySpring stores courses, notes, flashcards, and quiz progress in a local SQLite "
-        "database on YOUR computer. Our features do not send study material anywhere. "
-        "AI question generation is done through Google Gemini"
+        "On a personal computer, StudySpring stores courses, notes, flashcards, and quiz progress "
+        "in a local SQLite database. On the hosted site, durable storage must be configured by the "
+        "site owner; do not rely on a free-hosted session as your only copy of important study work. "
+        "AI question generation is done through Google Gemini."
     )

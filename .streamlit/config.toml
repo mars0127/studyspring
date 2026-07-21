@@ -1,14 +1,4 @@
-[theme]
-primaryColor = "#2F855A"
-backgroundColor = "#F7FAFC"
-secondaryBackgroundColor = "#EDF2F7"
-textColor = "#1A202C"
-font = "sans serif"
-
-[client]
-# Keep implementation details out of student-facing error screens.
-showErrorDetails = "none"
-
 [server]
-# Large scanned textbooks need more room than Streamlit's default upload limit.
-maxUploadSize = 300
+# Reject large uploads during transfer instead of allowing a 170 MB PDF to
+# exhaust the memory of a free Render instance.
+maxUploadSize = 40

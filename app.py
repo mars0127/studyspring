@@ -231,6 +231,13 @@ def make_progress_csv(attempts: list[dict[str, object]]) -> str:
 st.title("🌱 StudySpring")
 st.subheader("Turn your notes into a clearer study plan.")
 
+import_status = st.session_state.pop("import_status", None)
+if import_status:
+    if import_status.get("warning"):
+        st.warning(import_status["message"])
+    else:
+        st.success(import_status["message"])
+
 with st.sidebar:
     st.header("🌱 StudySpring")
     st.caption("Your private study workspace")
@@ -516,16 +523,16 @@ with st.expander("Add study material", expanded=not study_notes):
             except Exception as error:
                 st.error(f"We could not read those PDF pages: {error}")
             else:
+                message = "Scanned PDF pages saved as editable notes!"
                 if skipped_pages:
-                    st.warning(
+                    message = (
                         f"Saved the readable pages. Skipped image-only or unreadable page(s): "
                         f"{', '.join(map(str, skipped_pages))}."
                     )
                     if ocr_pause_reason:
-                        st.info(f"{ocr_pause_reason} Try the skipped pages again in a minute.")
-                else:
-                    st.success("Scanned PDF pages saved as editable notes!")
-                    st.rerun()
+                        message += f" {ocr_pause_reason}"
+                st.session_state["import_status"] = {"message": message, "warning": bool(skipped_pages)}
+                st.rerun()
 
     else:
         st.caption(
@@ -581,17 +588,14 @@ with st.expander("Add study material", expanded=not study_notes):
             else:
                 summary = f"Finished reading {total_pages} pages into one saved study note!"
                 if skipped_pages:
-                    st.warning(
+                    summary = (
                         f"{summary} Image-only or unreadable page(s) were skipped: "
                         f"{', '.join(map(str, skipped_pages))}."
                     )
                     if ocr_pause_reason:
-                        st.info(
-                            f"{ocr_pause_reason} The readable pages were still saved."
-                        )
-                else:
-                    st.success(summary)
-                    st.rerun()
+                        summary += f" {ocr_pause_reason}"
+                st.session_state["import_status"] = {"message": summary, "warning": bool(skipped_pages)}
+                st.rerun()
 
 if len(study_notes) >= 2:
     with st.expander("Combine study material"):

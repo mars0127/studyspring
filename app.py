@@ -4,6 +4,7 @@ import csv
 import math
 import os
 import random
+import time
 from datetime import date
 from io import BytesIO, StringIO
 
@@ -56,6 +57,11 @@ MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
 MAX_AUTOMATIC_SCANNED_TEXTBOOK_PAGES = int(
     os.getenv("AUTOMATIC_SCANNED_TEXTBOOK_MAX_PAGES", "120")
 )
+# Gemini's free tier permits 15 requests/minute. Stay below that rate so a
+# scanned PDF is completed page-by-page instead of losing pages to quota skips.
+OCR_REQUEST_INTERVAL_SECONDS = float(os.getenv("OCR_REQUEST_INTERVAL_SECONDS", "5"))
+OCR_QUOTA_RETRY_SECONDS = int(os.getenv("OCR_QUOTA_RETRY_SECONDS", "65"))
+MAX_OCR_QUOTA_RETRIES = 3
 
 
 st.set_page_config(page_title="StudySpring", page_icon="🌱", layout="wide")
@@ -118,12 +124,12 @@ def read_pdf_pages_for_import(
     api_key: str | None,
     progress,
 ) -> tuple[list[tuple[int, str]], list[int], str | None]:
-    """Read pages independently, preserving the import when an image has no text."""
+    """Read pages independently while pacing OCR requests below Gemini's free limit."""
     total_pages = last_page - first_page + 1
     extracted: list[tuple[int, str]] = []
     skipped_pages: list[int] = []
     client = None
-    ocr_pause_reason: str | None = None
+    last_ocr_request_at = 0.0
     for completed, page in enumerate(iter_pdf_pages(file_bytes, first_page, last_page), start=1):
         progress.progress(
             (completed - 1) / total_pages,
@@ -132,35 +138,46 @@ def read_pdf_pages_for_import(
         if page.image_bytes is None:
             extracted.append((page.number, page.text))
             continue
-        if not api_key or ocr_pause_reason:
+        if not api_key:
             skipped_pages.append(page.number)
-            reason = (
-                "AI OCR is not set up"
-                if not api_key
-                else "the AI OCR request limit was reached"
-            )
-            extracted.append((page.number, f"[Page {page.number} was skipped because {reason}.]"))
+            extracted.append((page.number, f"[Page {page.number} was skipped because AI OCR is not set up.]"))
             continue
         client = client or create_gemini_client(api_key)
-        try:
-            text = extract_text_from_image(api_key, page.image_bytes, "image/png", client=client)
-        except Exception as error:
-            if is_ocr_quota_error(error):
-                # Keep reading locally-extractable pages and preserve a usable
-                # partial study note. Retrying every following image would only
-                # repeat the same provider-limit failure.
-                ocr_pause_reason = "Gemini reached its temporary free-tier OCR request limit."
+        wait_seconds = OCR_REQUEST_INTERVAL_SECONDS - (time.monotonic() - last_ocr_request_at)
+        if wait_seconds > 0:
+            progress.progress(
+                (completed - 1) / total_pages,
+                text=f"Waiting briefly before reading page {page.number} to stay within the AI limit...",
+            )
+            time.sleep(wait_seconds)
+        for quota_attempt in range(MAX_OCR_QUOTA_RETRIES + 1):
+            try:
+                last_ocr_request_at = time.monotonic()
+                text = extract_text_from_image(api_key, page.image_bytes, "image/png", client=client)
+                break
+            except Exception as error:
+                if is_ocr_quota_error(error) and quota_attempt < MAX_OCR_QUOTA_RETRIES:
+                    progress.progress(
+                        (completed - 1) / total_pages,
+                        text=f"AI limit reached on page {page.number}; waiting {OCR_QUOTA_RETRY_SECONDS} seconds, then retrying...",
+                    )
+                    time.sleep(OCR_QUOTA_RETRY_SECONDS)
+                    continue
+                if is_ocr_quota_error(error):
+                    raise RuntimeError(
+                        f"Page {page.number} is still waiting for the AI request limit after "
+                        f"{MAX_OCR_QUOTA_RETRIES} retries. Please try again shortly."
+                    ) from error
+                if not is_unreadable_ocr_error(error):
+                    raise RuntimeError(f"Page {page.number} could not be read: {error}") from error
                 skipped_pages.append(page.number)
-                extracted.append((page.number, f"[Page {page.number} was skipped because the AI OCR request limit was reached.]"))
-                continue
-            if not is_unreadable_ocr_error(error):
-                raise RuntimeError(f"Page {page.number} could not be read: {error}") from error
-            skipped_pages.append(page.number)
-            extracted.append((page.number, f"[Page {page.number} was skipped because it contains no readable text.]"))
-            continue
-        extracted.append((page.number, text))
+                extracted.append((page.number, f"[Page {page.number} was skipped because it contains no readable text.]"))
+                text = None
+                break
+        if text is not None:
+            extracted.append((page.number, text))
     progress.progress(1.0, text="Organizing extracted text...")
-    return extracted, skipped_pages, ocr_pause_reason
+    return extracted, skipped_pages, None
 
 
 def prepare_ai_source(selected_notes: list[dict[str, object]], labeler) -> tuple[str, bool]:
@@ -213,6 +230,13 @@ def make_progress_csv(attempts: list[dict[str, object]]) -> str:
 
 st.title("🌱 StudySpring")
 st.subheader("Turn your notes into a clearer study plan.")
+
+import_status = st.session_state.pop("import_status", None)
+if import_status:
+    if import_status.get("warning"):
+        st.warning(import_status["message"])
+    else:
+        st.success(import_status["message"])
 
 with st.sidebar:
     st.header("🌱 StudySpring")
@@ -499,16 +523,16 @@ with st.expander("Add study material", expanded=not study_notes):
             except Exception as error:
                 st.error(f"We could not read those PDF pages: {error}")
             else:
+                message = "Scanned PDF pages saved as editable notes!"
                 if skipped_pages:
-                    st.warning(
+                    message = (
                         f"Saved the readable pages. Skipped image-only or unreadable page(s): "
                         f"{', '.join(map(str, skipped_pages))}."
                     )
                     if ocr_pause_reason:
-                        st.info(f"{ocr_pause_reason} Try the skipped pages again in a minute.")
-                else:
-                    st.success("Scanned PDF pages saved as editable notes!")
-                    st.rerun()
+                        message += f" {ocr_pause_reason}"
+                st.session_state["import_status"] = {"message": message, "warning": bool(skipped_pages)}
+                st.rerun()
 
     else:
         st.caption(
@@ -517,7 +541,7 @@ with st.expander("Add study material", expanded=not study_notes):
         )
         with st.form("scan_entire_pdf_form", clear_on_submit=True):
             entire_pdf = st.file_uploader("Choose a scanned PDF", type=["pdf"], key="entire_pdf")
-            confirmed = st.checkbox("I understand image-only pages may be skipped if the free AI limit is reached.")
+            confirmed = st.checkbox("I understand scanned pages are read one at a time and large scans can take several minutes.")
             start_full_scan = st.form_submit_button("Scan and save PDF", width="stretch")
         if start_full_scan:
             api_key = gemini_api_key()
@@ -564,18 +588,14 @@ with st.expander("Add study material", expanded=not study_notes):
             else:
                 summary = f"Finished reading {total_pages} pages into one saved study note!"
                 if skipped_pages:
-                    st.warning(
+                    summary = (
                         f"{summary} Image-only or unreadable page(s) were skipped: "
                         f"{', '.join(map(str, skipped_pages))}."
                     )
                     if ocr_pause_reason:
-                        st.info(
-                            f"{ocr_pause_reason} The readable pages were still saved. "
-                            "Try the skipped image pages again in a minute."
-                        )
-                else:
-                    st.success(summary)
-                    st.rerun()
+                        summary += f" {ocr_pause_reason}"
+                st.session_state["import_status"] = {"message": summary, "warning": bool(skipped_pages)}
+                st.rerun()
 
 if len(study_notes) >= 2:
     with st.expander("Combine study material"):

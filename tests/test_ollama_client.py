@@ -41,12 +41,19 @@ class GeminiClientTests(unittest.TestCase):
                 ).encode("utf-8")
 
         with patch("gemini_client.urlopen", return_value=FakeResponse()) as mocked_urlopen:
-            questions = generate_question_batch("test-key", "Mitosis supports growth.", 1)
+            questions = generate_question_batch(
+                "test-key", "Mitosis supports growth.", 1, "Cell division"
+            )
 
         self.assertEqual(questions[0]["correct_answer"], "Growth")
+        self.assertEqual(questions[0]["topic"], "Cell division")
         request = mocked_urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(payload["generationConfig"]["response_mime_type"], "application/json")
+        self.assertIn(
+            'Use "Cell division" as the topic value',
+            payload["contents"][0]["parts"][0]["text"],
+        )
         self.assertNotIn("test-key", request.full_url)
     def test_parse_questions_keeps_valid_question(self) -> None:
         raw = '''{"questions":[{"topic":"Mitosis","question":"Why does mitosis occur?","options":["Growth","Digestion","Breathing","Photosynthesis"],"correct_answer":"Growth","explanation":"It supports growth."}]}'''

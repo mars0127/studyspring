@@ -210,13 +210,16 @@ def split_question_source(notes: str, request_count: int) -> list[str]:
     return chunks
 
 
-def generate_question_batch(api_key: str, notes: str, question_count: int) -> list[dict[str, object]]:
+def generate_question_batch(
+    api_key: str, notes: str, question_count: int, topic_hint: str = ""
+) -> list[dict[str, object]]:
     """Generate one small JSON question batch with a bounded response size."""
     prompt = f'''Study material:
 {notes}
 
 Based only on the study material above, create exactly {question_count} multiple-choice study questions.
 The source may combine the student's notes with textbook excerpts, slides, and teacher resources.
+Use "{topic_hint.strip()}" as the topic value for every question when it is provided.
 Return JSON only, with this exact shape:
 {{"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"one exact option","explanation":"short explanation"}}]}}
 '''
@@ -227,7 +230,14 @@ Return JSON only, with this exact shape:
     )
     if not response_text:
         raise ValueError("Gemini returned an empty response. Please try again.")
-    return parse_questions(response_text)
+    questions = parse_questions(response_text)
+    # The selected label is the student's intentional topic boundary.  Gemini
+    # may return a more specific wording, but keeping the saved question under
+    # this label lets the practice view and weak-topic tracking stay coherent.
+    if topic_hint.strip():
+        for question in questions:
+            question["topic"] = topic_hint.strip()
+    return questions
 
 
 def plan_question_batches(notes: str, question_count: int) -> list[tuple[str, int]]:

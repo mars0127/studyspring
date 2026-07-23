@@ -77,6 +77,21 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(summary["content_length"], 200_000)
         self.assertEqual(full_note["content"], "A" * 200_000)
 
+    def test_large_note_preview_and_excerpt_stay_bounded(self) -> None:
+        database.create_course("Memory test", "Science", None)
+        course = database.list_courses()[0]
+        note_id = database.create_study_note(course["id"], "Large note", "A" * 200_000)
+
+        self.assertEqual(len(database.get_study_note_preview(note_id, 500)), 500)
+        excerpt = database.get_study_note_excerpt(note_id, 3_000, piece_count=3)
+        self.assertLessEqual(len(excerpt), 3_000)
+        self.assertIn("A", excerpt)
+
+        database.update_study_note_metadata(note_id, "Renamed", "Unit 1", "Chapter 1", "Lesson 1")
+        summary = database.list_study_notes(course["id"], include_content=False)[0]
+        self.assertEqual(summary["title"], "Renamed")
+        self.assertEqual(summary["content_length"], 200_000)
+
     def test_ai_question_batch_is_saved_atomically(self) -> None:
         database.create_course("Math", "Mathematics", None)
         course = database.list_courses()[0]

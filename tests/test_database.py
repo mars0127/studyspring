@@ -110,6 +110,30 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual([summary["topic"] for summary in summaries], ["Meiosis", "Mitosis"])
         self.assertEqual(database.get_study_note(first_note_id)["topic"], "Mitosis")
 
+    def test_topic_sections_copy_note_ranges_and_preserve_the_original(self) -> None:
+        database.create_course("Kinesiology", "Health and Physical Education", None)
+        course = database.list_courses()[0]
+        note_id = database.create_study_note(
+            course["id"], "Chapter 4", "Muscle naming\n\nMuscle structure", chapter="4"
+        )
+
+        created_ids = database.create_topic_sections_from_note(
+            note_id,
+            [
+                {"topic": "Muscle naming", "start": 0, "end": 13},
+                {"topic": "Muscle structure", "start": 15, "end": 31},
+            ],
+        )
+
+        self.assertEqual(len(created_ids), 2)
+        notes = database.list_study_notes(course["id"])
+        self.assertEqual(len(notes), 3)
+        self.assertEqual(
+            [note["topic"] for note in notes if note["id"] in created_ids],
+            ["Muscle structure", "Muscle naming"],
+        )
+        self.assertEqual(database.get_study_note(note_id)["content"], "Muscle naming\n\nMuscle structure")
+
     def test_ai_question_batch_is_saved_atomically(self) -> None:
         database.create_course("Math", "Mathematics", None)
         course = database.list_courses()[0]

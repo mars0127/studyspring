@@ -21,6 +21,7 @@ from database import (
     create_quiz_question,
     create_quiz_questions,
     create_study_note,
+    create_topic_sections_from_note,
     append_study_note_content,
     course_quiz_stats,
     course_attempt_history,
@@ -60,6 +61,7 @@ from pdf_import import (
     iter_pdf_pages_from_path,
     pdf_page_count,
     pdf_page_count_from_path,
+    split_study_note_topics,
 )
 
 
@@ -68,7 +70,7 @@ MAX_SELECTED_SCANNED_PDF_PAGES = 120
 # envelope of Render's free instance.  It is split into coherent batches later.
 MAX_AI_SOURCE_CHARACTERS = 36_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
-APP_VERSION = "2026.07.23.4"
+APP_VERSION = "2026.07.23.5"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -704,6 +706,88 @@ if len(study_notes) >= 2:
             else:
                 st.success("Study material combined!")
                 st.rerun()
+
+if study_notes:
+    with st.expander("Organize a note into topics", expanded=False):
+        st.caption(
+            "StudySpring finds clear headings such as 4.1 Muscle Structure or Muscle Naming, "
+            "then lets you review the proposed sections before saving. This is free and does not "
+            "send the note to AI."
+        )
+        note_by_id = {note["id"]: note for note in study_notes}
+        proposed_note_id = st.selectbox(
+            "Study material to organize",
+            list(note_by_id),
+            format_func=lambda note_id: note_by_id[note_id]["title"],
+            key=f"topic_split_note_{selected_course['id']}",
+        )
+        proposal_key = f"topic_split_proposal_{selected_course['id']}"
+        if st.button("Find topic sections", width="stretch", key=f"find_topics_{selected_course['id']}"):
+            source_note = get_study_note(proposed_note_id)
+            sections = split_study_note_topics(str(source_note["content"]))
+            if not sections:
+                st.session_state.pop(proposal_key, None)
+                st.info(
+                    "No reliable topic headings were found. Add headings to the note, or keep it as one "
+                    "topic rather than risking an incorrect automatic split."
+                )
+            else:
+                st.session_state[proposal_key] = {
+                    "note_id": proposed_note_id,
+                    "content_length": len(str(source_note["content"])),
+                    "sections": [
+                        {"topic": section.topic, "start": section.start, "end": section.end}
+                        for section in sections
+                    ],
+                }
+                st.rerun()
+
+        proposal = st.session_state.get(proposal_key)
+        if proposal:
+            proposal_note_id = int(proposal["note_id"])
+            if proposal_note_id not in note_by_id:
+                st.session_state.pop(proposal_key, None)
+                st.warning("That original note was changed or removed. Find the topic sections again.")
+            else:
+                proposed_sections = list(proposal["sections"])
+                st.success(
+                    f"Found {len(proposed_sections)} proposed topic section(s). Review their names, then save."
+                )
+                with st.form(f"save_topic_sections_{selected_course['id']}"):
+                    edited_sections: list[dict[str, object]] = []
+                    for index, section in enumerate(proposed_sections, start=1):
+                        character_count = int(section["end"]) - int(section["start"])
+                        topic = st.text_input(
+                            f"Section {index} topic ({character_count:,} characters)",
+                            value=str(section["topic"]),
+                            key=f"topic_section_name_{selected_course['id']}_{index}",
+                        )
+                        edited_sections.append(
+                            {
+                                "topic": topic,
+                                "start": int(section["start"]),
+                                "end": int(section["end"]),
+                            }
+                        )
+                    keep_original = st.checkbox(
+                        "Keep the original complete note", value=True,
+                        help="Recommended. You can remove it later after checking the topic sections.",
+                    )
+                    save_sections = st.form_submit_button("Save topic sections", width="stretch")
+                if save_sections:
+                    try:
+                        current_note = get_study_note(proposal_note_id)
+                        if len(str(current_note["content"])) != int(proposal["content_length"]):
+                            raise ValueError("This note changed while the topic sections were open. Find them again.")
+                        create_topic_sections_from_note(
+                            proposal_note_id, edited_sections, keep_original=keep_original
+                        )
+                    except ValueError as error:
+                        st.error(str(error))
+                    else:
+                        st.session_state.pop(proposal_key, None)
+                        st.success("Topic sections saved. You can now choose each topic for AI practice.")
+                        st.rerun()
 
 if study_notes:
     available_units = sorted({note["unit"] for note in study_notes if note["unit"]})

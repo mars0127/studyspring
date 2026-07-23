@@ -17,6 +17,7 @@ from pdf_import import (
     iter_pdf_pages_from_path,
     pdf_page_count,
     pdf_page_count_from_path,
+    split_study_note_topics,
     split_textbook_sections,
 )
 
@@ -78,6 +79,29 @@ class TextbookSectionTests(unittest.TestCase):
         self.assertEqual(len(sections), 2)
         self.assertEqual(sections[0].last_page, 1)
         self.assertEqual(sections[1].first_page, 2)
+
+    def test_note_topics_use_real_subheadings_and_keep_short_references_together(self) -> None:
+        text = (
+            "Chapter 4: Muscles\n" + "A" * 800
+            + "\n\n4.1 Muscle Naming\n" + "B" * 800
+            + "\n\n4.2 Muscle Structure\n" + "C" * 800
+            + "\n\n4.3 Muscle Contractions\n" + "D" * 800
+        )
+
+        sections = split_study_note_topics(text)
+
+        self.assertEqual([section.topic for section in sections], [
+            "Chapter 4: Muscles",
+            "4.1 Muscle Naming",
+            "4.2 Muscle Structure",
+            "4.3 Muscle Contractions",
+        ])
+        self.assertEqual("".join(text[section.start:section.end] for section in sections), text)
+
+    def test_note_topics_do_not_split_plain_prose_without_headings(self) -> None:
+        self.assertEqual(
+            split_study_note_topics("Muscle structure helps movement. " * 100), []
+        )
 
 
 if __name__ == "__main__":

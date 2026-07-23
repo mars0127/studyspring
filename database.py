@@ -430,6 +430,62 @@ def delete_study_note(note_id: int) -> None:
         connection.execute("DELETE FROM study_notes WHERE id = ?", (note_id,))
 
 
+def create_topic_sections_from_note(
+    note_id: int, sections: list[dict[str, object]], keep_original: bool = True
+) -> list[int]:
+    """Copy validated character ranges from one note into topic-labelled notes.
+
+    Section text is read and written inside one SQLite transaction. The app can
+    therefore keep only titles and offsets in Streamlit session state instead
+    of duplicating a large imported document in memory while a student reviews
+    the proposed topic boundaries.
+    """
+    if not sections:
+        raise ValueError("Find at least one topic section before saving.")
+    with get_connection() as connection:
+        original = connection.execute(
+            """
+            SELECT course_id, title, content, unit, chapter, lesson, source_group
+            FROM study_notes WHERE id = ?
+            """,
+            (note_id,),
+        ).fetchone()
+        if original is None:
+            raise ValueError("This study note no longer exists. Find the topics again.")
+        content = str(original["content"])
+        created_ids: list[int] = []
+        for item in sections:
+            topic = str(item.get("topic", "")).strip()
+            start = int(item.get("start", -1))
+            end = int(item.get("end", -1))
+            if not topic or start < 0 or end <= start or end > len(content):
+                raise ValueError("One proposed topic section is invalid. Find the topics again.")
+            section_content = content[start:end].strip()
+            if not section_content:
+                raise ValueError("One proposed topic section has no readable text.")
+            cursor = connection.execute(
+                """
+                INSERT INTO study_notes
+                    (course_id, title, content, unit, lesson, chapter, source_group, topic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    original["course_id"],
+                    f"{original['title']} — {topic}",
+                    section_content,
+                    original["unit"],
+                    original["lesson"],
+                    original["chapter"],
+                    original["source_group"],
+                    topic,
+                ),
+            )
+            created_ids.append(int(cursor.lastrowid))
+        if not keep_original:
+            connection.execute("DELETE FROM study_notes WHERE id = ?", (note_id,))
+    return created_ids
+
+
 def create_quiz_question(
     course_id: int,
     topic: str,

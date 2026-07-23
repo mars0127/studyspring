@@ -19,6 +19,7 @@ from database import (
     create_course,
     create_flashcard,
     create_quiz_question,
+    create_quiz_questions,
     create_study_note,
     append_study_note_content,
     course_quiz_stats,
@@ -61,9 +62,11 @@ from pdf_import import (
 
 
 MAX_SELECTED_SCANNED_PDF_PAGES = 120
-MAX_AI_SOURCE_CHARACTERS = 75_000
+# Keep the complete prompt plan comfortably below the memory and latency
+# envelope of Render's free instance.  It is split into coherent batches later.
+MAX_AI_SOURCE_CHARACTERS = 36_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
-APP_VERSION = "2026.07.21.5"
+APP_VERSION = "2026.07.23.1"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -107,6 +110,12 @@ def gemini_api_key() -> str | None:
         # A missing or malformed secrets file should not take down the whole app.
         secret_value = None
     return secret_value or os.getenv("GEMINI_API_KEY")
+
+
+def is_gemini_quota_error(error: Exception) -> bool:
+    """Recognize provider limits without exposing the provider's raw response."""
+    message = str(error).lower()
+    return "resource_exhausted" in message or "quota exceeded" in message or " 429" in message
 
 
 def course_label(course: dict[str, object]) -> str:
@@ -895,26 +904,30 @@ if study_notes:
                         if wait_seconds > 0:
                             time.sleep(wait_seconds)
                         batch_questions = generate_question_batch(api_key, source_chunk, batch_size)
-                        for generated_question in batch_questions:
-                            create_quiz_question(
-                                selected_course["id"],
-                                generated_question["topic"],
-                                generated_question["question"],
-                                generated_question["options"],
-                                generated_question["correct_answer"],
-                                generated_question["explanation"],
-                            )
+                        create_quiz_questions(selected_course["id"], batch_questions)
                     question_job["saved_count"] += len(batch_questions)
                     question_job["next_batch"] = batch_index + 1
                     question_job["next_request_after"] = time.monotonic() + 6
                     del batch_questions
                     gc.collect()
                 except Exception as error:
-                    st.warning(
-                        f"Saved {question_job['saved_count']} question(s). The next small AI batch paused: {error}"
-                    )
-                    if st.button("Continue question generation", width="stretch"):
-                        st.rerun()
+                    if is_gemini_quota_error(error):
+                        # Repeating a request while the project quota is exhausted
+                        # cannot succeed and can keep the app in a failed rerun loop.
+                        st.session_state.pop(question_job_key, None)
+                        st.warning(
+                            f"Saved {question_job['saved_count']} question(s). Gemini has reached its "
+                            "temporary limit, so generation was stopped safely. Try again after the limit resets."
+                        )
+                    else:
+                        st.warning(
+                            f"Saved {question_job['saved_count']} question(s). The next small AI batch paused. "
+                            "You can continue without losing the questions already saved."
+                        )
+                        with st.expander("Technical details"):
+                            st.code(str(error))
+                        if st.button("Continue question generation", width="stretch"):
+                            st.rerun()
                 else:
                     if question_job["next_batch"] < len(planned_batches):
                         st.session_state[question_job_key] = question_job

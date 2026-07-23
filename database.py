@@ -420,6 +420,40 @@ def create_quiz_question(
         )
 
 
+def create_quiz_questions(
+    course_id: int, questions: list[dict[str, object]]
+) -> None:
+    """Save one generated batch in one SQLite transaction.
+
+    This avoids repeatedly opening database connections during AI generation.
+    Validation is delegated to the existing single-question writer so manually
+    created and AI-created questions follow the same rules.
+    """
+    if not questions:
+        return
+    with get_connection() as connection:
+        for item in questions:
+            topic = str(item.get("topic", "")).strip()
+            question = str(item.get("question", "")).strip()
+            options = item.get("options")
+            correct_answer = str(item.get("correct_answer", "")).strip()
+            explanation = str(item.get("explanation", "")).strip()
+            if not topic or not question or not isinstance(options, list) or len(options) != 4:
+                raise ValueError("The AI returned an invalid practice question.")
+            clean_options = [str(option).strip() for option in options]
+            if any(not option for option in clean_options) or correct_answer not in clean_options:
+                raise ValueError("The AI returned an invalid answer choice.")
+            connection.execute(
+                """
+                INSERT INTO quiz_questions
+                    (course_id, topic, question, options_json, correct_answer, explanation,
+                     question_type, achievement_category, marks, sample_answer)
+                VALUES (?, ?, ?, ?, ?, ?, 'multiple_choice', 'Knowledge & Understanding', 1, '')
+                """,
+                (course_id, topic, question, json.dumps(clean_options), correct_answer, explanation),
+            )
+
+
 def list_quiz_questions(course_id: int) -> list[dict[str, object]]:
     """Return quiz questions with their answer choices unpacked as a list."""
     with get_connection() as connection:

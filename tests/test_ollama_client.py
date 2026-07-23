@@ -2,7 +2,13 @@
 
 import unittest
 
-from gemini_client import _semantic_sections, parse_questions, plan_question_batches, split_question_source
+from gemini_client import (
+    MAX_SOURCE_CHARACTERS_PER_REQUEST,
+    _semantic_sections,
+    parse_questions,
+    plan_question_batches,
+    split_question_source,
+)
 
 
 class GeminiClientTests(unittest.TestCase):
@@ -22,9 +28,9 @@ class GeminiClientTests(unittest.TestCase):
         source = "A" * 75_000
         chunks = split_question_source(source, 3)
 
-        self.assertEqual(len(chunks), 4)
+        self.assertEqual(len(chunks), 7)
         self.assertEqual("".join(chunks), source)
-        self.assertLessEqual(max(len(chunk) for chunk in chunks), 20_000)
+        self.assertLessEqual(max(len(chunk) for chunk in chunks), MAX_SOURCE_CHARACTERS_PER_REQUEST)
 
     def test_chapter_references_and_tiny_sections_do_not_become_boundaries(self) -> None:
         source = (
@@ -44,9 +50,20 @@ class GeminiClientTests(unittest.TestCase):
     def test_twenty_questions_are_planned_as_small_saved_batches(self) -> None:
         batches = plan_question_batches("A" * 75_000, 20)
 
+        self.assertEqual(len(batches), 7)
+        self.assertEqual([question_count for _, question_count in batches], [3, 3, 3, 3, 3, 3, 2])
+        self.assertLessEqual(
+            max(len(source) for source, _ in batches), MAX_SOURCE_CHARACTERS_PER_REQUEST
+        )
+
+    def test_render_sized_source_keeps_twenty_questions_to_four_requests(self) -> None:
+        batches = plan_question_batches("A" * 36_000, 20)
+
         self.assertEqual(len(batches), 4)
         self.assertEqual([question_count for _, question_count in batches], [5, 5, 5, 5])
-        self.assertLessEqual(max(len(source) for source, _ in batches), 20_000)
+        self.assertLessEqual(
+            max(len(source) for source, _ in batches), MAX_SOURCE_CHARACTERS_PER_REQUEST
+        )
 
 
 if __name__ == "__main__":

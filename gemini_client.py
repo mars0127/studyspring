@@ -14,7 +14,9 @@ DEFAULT_MODEL = "gemini-3.1-flash-lite"
 # context window.  This prevents a long quiz from holding one browser request
 # open while it produces a very large JSON response.
 MAX_QUESTIONS_PER_REQUEST = 5
-MAX_SOURCE_CHARACTERS_PER_REQUEST = 20_000
+# A modest request keeps response time and transient memory low on Render's
+# smallest instance.  Longer source material is spread over more short calls.
+MAX_SOURCE_CHARACTERS_PER_REQUEST = 12_000
 MIN_SEMANTIC_SECTION_CHARACTERS = 3_000
 QUESTION_REQUEST_INTERVAL_SECONDS = 6
 QUESTION_QUOTA_RETRY_SECONDS = 65
@@ -39,7 +41,7 @@ def create_gemini_client(api_key: str):
 
 def _generate_with_retries(client, **request_arguments):
     """Retry temporary provider-overload errors before failing the student's request."""
-    for attempt in range(6):
+    for attempt in range(3):
         try:
             return client.models.generate_content(**request_arguments)
         except Exception as error:
@@ -49,7 +51,7 @@ def _generate_with_retries(client, **request_arguments):
                 or "UNAVAILABLE" in error_text
                 or "WinError 10013" in error_text
             )
-            if not temporary_error or attempt == 5:
+            if not temporary_error or attempt == 2:
                 raise
             time.sleep(2**attempt)
 
@@ -192,18 +194,24 @@ The source may combine the student's notes with textbook excerpts, slides, and t
 Return JSON only, with this exact shape:
 {{"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"one exact option","explanation":"short explanation"}}]}}
 '''
-    client = genai.Client(api_key=api_key)
-    response = _generate_with_retries(
-        client,
-        model=DEFAULT_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json", temperature=0.3, max_output_tokens=4096
-        ),
-    )
-    if not response.text:
+    # Close the HTTP client after every short batch.  Leaving these clients
+    # open can accumulate sockets and memory in a long-lived Streamlit process.
+    with genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=30_000),
+    ) as client:
+        response = _generate_with_retries(
+            client,
+            model=DEFAULT_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json", temperature=0.3, max_output_tokens=2048
+            ),
+        )
+        response_text = response.text
+    if not response_text:
         raise ValueError("Gemini returned an empty response. Please try again.")
-    return parse_questions(response.text)
+    return parse_questions(response_text)
 
 
 def plan_question_batches(notes: str, question_count: int) -> list[tuple[str, int]]:

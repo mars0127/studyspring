@@ -68,7 +68,7 @@ MAX_SELECTED_SCANNED_PDF_PAGES = 120
 # envelope of Render's free instance.  It is split into coherent batches later.
 MAX_AI_SOURCE_CHARACTERS = 36_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
-APP_VERSION = "2026.07.23.3"
+APP_VERSION = "2026.07.23.4"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -448,6 +448,7 @@ with st.expander("Add study material", expanded=not study_notes):
     new_note_unit = ""
     new_note_chapter = ""
     new_note_lesson = ""
+    new_note_topic = ""
     organization_left, organization_middle, organization_right = st.columns(3)
     new_note_unit = organization_left.text_input(
         "Unit (optional)", placeholder="e.g. Unit 2: Skeletal system"
@@ -457,6 +458,11 @@ with st.expander("Add study material", expanded=not study_notes):
     )
     new_note_chapter = organization_middle.text_input(
         "Chapter (optional)", placeholder="e.g. Chapter 3"
+    )
+    new_note_topic = st.text_input(
+        "Topic for practice quizzes (recommended)",
+        placeholder="e.g. Mitosis, Quadratic functions, Supply and demand",
+        help="Use one clear topic name. Material with the same topic can be practised together.",
     )
 
     if material_type == "Paste text":
@@ -470,7 +476,7 @@ with st.expander("Add study material", expanded=not study_notes):
             saved_note = st.form_submit_button("Save material", width="stretch")
         if saved_note:
             try:
-                create_study_note(selected_course["id"], note_title, note_content, new_note_unit, new_note_lesson, new_note_chapter, new_note_source_group)
+                create_study_note(selected_course["id"], note_title, note_content, new_note_unit, new_note_lesson, new_note_chapter, new_note_source_group, new_note_topic)
             except ValueError as error:
                 st.error(str(error))
             else:
@@ -489,7 +495,7 @@ with st.expander("Add study material", expanded=not study_notes):
                 pdf_text = extract_pdf_text(uploaded_pdf.getvalue())
                 if not pdf_text:
                     raise ValueError("No text was found. Choose 'Pages from a scanned PDF' instead.")
-                create_study_note(selected_course["id"], uploaded_pdf.name.removesuffix(".pdf"), pdf_text, new_note_unit, new_note_lesson, new_note_chapter, new_note_source_group)
+                create_study_note(selected_course["id"], uploaded_pdf.name.removesuffix(".pdf"), pdf_text, new_note_unit, new_note_lesson, new_note_chapter, new_note_source_group, new_note_topic)
             except Exception as error:
                 st.error(f"We could not read that PDF: {error}")
             else:
@@ -511,7 +517,7 @@ with st.expander("Add study material", expanded=not study_notes):
                 if uploaded_image.size > 10 * 1024 * 1024:
                     raise ValueError("Choose an image smaller than 10 MB.")
                 image_text = extract_text_from_image(api_key, uploaded_image.getvalue(), uploaded_image.type or "image/jpeg")
-                create_study_note(selected_course["id"], uploaded_image.name.rsplit(".", 1)[0], image_text, new_note_unit, new_note_lesson, new_note_chapter, new_note_source_group)
+                create_study_note(selected_course["id"], uploaded_image.name.rsplit(".", 1)[0], image_text, new_note_unit, new_note_lesson, new_note_chapter, new_note_source_group, new_note_topic)
             except Exception as error:
                 st.error(f"We could not read that image: {error}")
             else:
@@ -548,6 +554,7 @@ with st.expander("Add study material", expanded=not study_notes):
                     new_note_lesson,
                     new_note_chapter,
                     new_note_source_group,
+                    new_note_topic,
                 )
             except Exception as error:
                 st.error(f"We could not read those PDF pages: {error}")
@@ -597,6 +604,7 @@ with st.expander("Add study material", expanded=not study_notes):
                     new_note_lesson,
                     new_note_chapter,
                     new_note_source_group,
+                    new_note_topic,
                 )
                 st.session_state[scan_job_key] = {
                     "path": str(pdf_path),
@@ -755,18 +763,21 @@ if study_notes:
                 updated_unit = organization_left.text_input("Unit", value=note["unit"], key=f"note_unit_{note['id']}")
                 updated_chapter = organization_middle.text_input("Chapter", value=note["chapter"], key=f"note_chapter_{note['id']}")
                 updated_lesson = organization_right.text_input("Lesson", value=note["lesson"], key=f"note_lesson_{note['id']}")
+                updated_topic = st.text_input(
+                    "Topic for practice quizzes", value=note["topic"], key=f"note_topic_{note['id']}"
+                )
                 save_note = st.form_submit_button("Save note changes")
             if save_note:
                 try:
                     if note_is_large:
                         update_study_note_metadata(
-                            note["id"], updated_title, updated_unit, updated_chapter, updated_lesson
+                            note["id"], updated_title, updated_unit, updated_chapter, updated_lesson, updated_topic
                         )
                     else:
                         update_study_note(
                             note["id"], updated_title, updated_content,
                             updated_unit, updated_chapter, updated_lesson,
-                            "lesson",
+                            "lesson", updated_topic,
                         )
                 except ValueError as error:
                     st.error(str(error))
@@ -822,10 +833,9 @@ st.subheader("Practice quiz")
 st.write("Create questions now, then practise them in the quiz below.")
 
 if study_notes:
-    with st.expander("Generate questions from notes with AI"):
-        st.markdown("#### 1. Build your question bank")
+    with st.expander("Practice a topic with AI", expanded=True):
         st.caption(
-            "Choose one note, several notes, or every note in this course. Only those chosen notes are sent to Google Gemini."
+            "Choose one saved topic. StudySpring uses only material in that topic, then saves your results so it can spot weak areas."
         )
         api_key = gemini_api_key()
         if api_key:
@@ -836,21 +846,17 @@ if study_notes:
                 )
                 return f"{location} — {note['title']}" if location else str(note["title"])
 
-            source_scope = st.radio(
-                "Quiz source",
-                ["All saved material", "Choose specific materials"],
-                horizontal=True,
+            def note_topic(note: dict[str, object]) -> str:
+                return str(note.get("topic") or note.get("lesson") or note["title"])
+
+            saved_topics = sorted({note_topic(note) for note in note_options})
+            chosen_topic = st.selectbox(
+                "Topic to practise",
+                saved_topics,
+                help="Add topic labels while importing material to make this list more precise.",
             )
-            if source_scope == "Choose specific materials":
-                selected_notes = st.multiselect(
-                    "Choose one or more materials",
-                    note_options,
-                    format_func=ai_note_label,
-                    key="ai_note_selector",
-                )
-            else:
-                selected_notes = note_options
-                st.info(f"This quiz will use all {len(selected_notes)} saved study material item(s).")
+            selected_notes = [note for note in note_options if note_topic(note) == chosen_topic]
+            st.caption(f"Using {len(selected_notes)} saved material item(s) for **{chosen_topic}**.")
 
             active_question_job = st.session_state.get(f"ai_question_job_{selected_course['id']}")
             if active_question_job:
@@ -860,14 +866,12 @@ if study_notes:
             else:
                 source_text, source_was_limited = prepare_ai_source(selected_notes, ai_note_label)
             if selected_notes and not active_question_job:
-                st.caption(
-                    f"Selected source: {len(selected_notes)} note(s), {len(source_text):,} characters."
-                )
+                st.caption(f"Topic material: {len(source_text):,} characters.")
             if source_was_limited:
                 st.info(
                     "This material is larger than one safe AI request. StudySpring is using a "
-                    "balanced sample from across the selected notes. Choose specific notes for a "
-                    "more focused quiz."
+                    "balanced sample from across this topic. Add more specific topic labels to "
+                    "make future quizzes even more focused."
                 )
             source_length = len(source_text)
             if source_length <= 4_000:
@@ -883,12 +887,12 @@ if study_notes:
                 "This is a suggestion, not a requirement."
             )
             question_count = st.number_input(
-                "Questions to add to your question bank",
+                "Questions in this topic quiz",
                 min_value=0,
                 max_value=recommended_maximum,
                 value=(recommended_minimum + recommended_maximum) // 2,
                 step=1,
-                help="Choose any amount from zero up to the safe maximum for this material. You can choose how many saved questions to practise afterwards.",
+                help="Choose a safe amount for this one topic. The quiz will be ready as soon as generation finishes.",
             )
             if question_count > 8:
                 st.caption(
@@ -908,7 +912,9 @@ if study_notes:
                         wait_seconds = float(question_job.get("next_request_after", 0)) - time.monotonic()
                         if wait_seconds > 0:
                             time.sleep(wait_seconds)
-                        batch_questions = generate_question_batch(api_key, source_chunk, batch_size)
+                        batch_questions = generate_question_batch(
+                            api_key, source_chunk, batch_size, str(question_job["topic"])
+                        )
                         create_quiz_questions(selected_course["id"], batch_questions)
                     question_job["saved_count"] += len(batch_questions)
                     question_job["next_batch"] = batch_index + 1
@@ -939,8 +945,9 @@ if study_notes:
                         st.rerun()
                     else:
                         st.session_state.pop(question_job_key, None)
-                        st.success(f"Saved {question_job['saved_count']} AI-generated question(s)!")
+                        st.success(f"Your {question_job['saved_count']}-question {question_job['topic']} quiz is ready below!")
                         st.session_state["open_practice_quiz"] = True
+                        st.session_state["preferred_quiz_topic"] = str(question_job["topic"])
                         st.rerun()
             elif st.button("Generate AI questions", width="stretch", disabled=question_count == 0):
                 try:
@@ -951,6 +958,7 @@ if study_notes:
                         "next_batch": 0,
                         "saved_count": 0,
                         "next_request_after": 0,
+                        "topic": chosen_topic,
                     }
                     st.rerun()
                 except Exception as error:
@@ -1035,13 +1043,18 @@ if short_answer_test_questions:
             "Write a response, then Gemini marks it against the saved marking guide. "
             "This is practice feedback, not an official teacher mark."
         )
-        short_answer_count = st.slider(
-            "Short-answer questions to practise",
-            min_value=1,
-            max_value=min(10, len(short_answer_test_questions)),
-            value=min(3, len(short_answer_test_questions)),
-            key="short_answer_practice_count",
-        )
+        maximum_short_answer_count = min(10, len(short_answer_test_questions))
+        if maximum_short_answer_count == 1:
+            short_answer_count = 1
+            st.caption("This selection currently has 1 saved short-answer question.")
+        else:
+            short_answer_count = st.slider(
+                "Short-answer questions to practise",
+                min_value=1,
+                max_value=maximum_short_answer_count,
+                value=min(3, maximum_short_answer_count),
+                key="short_answer_practice_count",
+            )
         active_short_answers = short_answer_test_questions[:short_answer_count]
         with st.form("take_short_answer_practice_form"):
             short_responses: dict[int, str] = {}
@@ -1124,18 +1137,20 @@ else:
                 )
 
 with st.expander(
-        "2. Take a practice quiz from your saved question bank",
+        "Practice saved topic questions",
         expanded=bool(st.session_state.pop("open_practice_quiz", False)),
     ):
         all_topics = sorted({str(question["topic"]) for question in quiz_questions})
         quiz_style = st.radio(
-            "Quiz type",
+        "Practice mode",
             ["Adaptive review", "Choose a topic"],
             horizontal=True,
             help="Adaptive review puts your lowest-scoring topics first.",
         )
         if quiz_style == "Choose a topic":
-            requested_topic = st.selectbox("Topic", all_topics)
+            preferred_topic = st.session_state.pop("preferred_quiz_topic", None)
+            selected_index = all_topics.index(preferred_topic) if preferred_topic in all_topics else 0
+            requested_topic = st.selectbox("Topic", all_topics, index=selected_index)
             quiz_candidates = [
                 question for question in quiz_questions if question["topic"] == requested_topic
             ]
@@ -1177,7 +1192,7 @@ with st.expander(
             st.caption("This selection currently has 1 saved question.")
         else:
             quiz_size = st.slider(
-                "Questions to use from your saved question bank",
+                "Questions in this practice quiz",
                 min_value=1,
                 max_value=maximum_quiz_size,
                 value=min(5, maximum_quiz_size),

@@ -88,10 +88,27 @@ class DatabaseTests(unittest.TestCase):
         self.assertLessEqual(len(excerpt), 3_000)
         self.assertIn("A", excerpt)
 
-        database.update_study_note_metadata(note_id, "Renamed", "Unit 1", "Chapter 1", "Lesson 1")
+        database.update_study_note_metadata(
+            note_id, "Renamed", "Unit 1", "Chapter 1", "Lesson 1", "Cell division"
+        )
         summary = database.list_study_notes(course["id"], include_content=False)[0]
         self.assertEqual(summary["title"], "Renamed")
         self.assertEqual(summary["content_length"], 200_000)
+        self.assertEqual(summary["topic"], "Cell division")
+
+    def test_notes_keep_topic_labels_for_topic_first_practice(self) -> None:
+        database.create_course("Biology", "Science", None)
+        course = database.list_courses()[0]
+        first_note_id = database.create_study_note(
+            course["id"], "Mitosis handout", "Cells divide for growth.", topic="Mitosis"
+        )
+        database.create_study_note(
+            course["id"], "Meiosis handout", "Gametes are formed.", topic="Meiosis"
+        )
+
+        summaries = database.list_study_notes(course["id"], include_content=False)
+        self.assertEqual([summary["topic"] for summary in summaries], ["Meiosis", "Mitosis"])
+        self.assertEqual(database.get_study_note(first_note_id)["topic"], "Mitosis")
 
     def test_ai_question_batch_is_saved_atomically(self) -> None:
         database.create_course("Math", "Mathematics", None)

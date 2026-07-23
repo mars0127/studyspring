@@ -120,6 +120,7 @@ def initialize_database() -> None:
                 unit TEXT NOT NULL DEFAULT '',
                 chapter TEXT NOT NULL DEFAULT '',
                 lesson TEXT NOT NULL DEFAULT '',
+                topic TEXT NOT NULL DEFAULT '',
                 source_group TEXT NOT NULL DEFAULT 'lesson',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (course_id) REFERENCES courses(id)
@@ -136,6 +137,8 @@ def initialize_database() -> None:
             connection.execute("ALTER TABLE study_notes ADD COLUMN chapter TEXT NOT NULL DEFAULT ''")
         if "lesson" not in note_columns:
             connection.execute("ALTER TABLE study_notes ADD COLUMN lesson TEXT NOT NULL DEFAULT ''")
+        if "topic" not in note_columns:
+            connection.execute("ALTER TABLE study_notes ADD COLUMN topic TEXT NOT NULL DEFAULT ''")
         if "source_group" not in note_columns:
             connection.execute(
                 "ALTER TABLE study_notes ADD COLUMN source_group TEXT NOT NULL DEFAULT 'lesson'"
@@ -254,7 +257,7 @@ def list_courses() -> list[sqlite3.Row]:
 
 
 def create_study_note(
-    course_id: int, title: str, content: str, unit: str = "", lesson: str = "", chapter: str = "", source_group: str = "lesson"
+    course_id: int, title: str, content: str, unit: str = "", lesson: str = "", chapter: str = "", source_group: str = "lesson", topic: str = ""
 ) -> int:
     """Save study material for a particular course."""
     clean_title = title.strip()
@@ -265,8 +268,8 @@ def create_study_note(
 
     with get_connection() as connection:
         cursor = connection.execute(
-            "INSERT INTO study_notes (course_id, title, content, unit, lesson, chapter, source_group) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (course_id, clean_title, clean_content, unit.strip(), lesson.strip(), chapter.strip(), source_group),
+            "INSERT INTO study_notes (course_id, title, content, unit, lesson, chapter, source_group, topic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (course_id, clean_title, clean_content, unit.strip(), lesson.strip(), chapter.strip(), source_group, topic.strip()),
         )
         return int(cursor.lastrowid)
 
@@ -307,7 +310,7 @@ def list_study_notes(course_id: int, include_content: bool = True) -> list[sqlit
     with get_connection() as connection:
         return connection.execute(
             f"""
-            SELECT id, title, {content_column} unit, chapter, lesson, source_group, created_at
+            SELECT id, title, {content_column} unit, chapter, lesson, topic, source_group, created_at
             FROM study_notes
             WHERE course_id = ?
             ORDER BY id DESC
@@ -321,7 +324,7 @@ def get_study_note(note_id: int) -> sqlite3.Row | None:
     with get_connection() as connection:
         return connection.execute(
             """
-            SELECT id, title, content, unit, chapter, lesson, source_group, created_at
+            SELECT id, title, content, unit, chapter, lesson, topic, source_group, created_at
             FROM study_notes
             WHERE id = ?
             """,
@@ -376,7 +379,7 @@ def get_study_note_excerpt(
 
 
 def update_study_note_metadata(
-    note_id: int, title: str, unit: str, chapter: str, lesson: str
+    note_id: int, title: str, unit: str, chapter: str, lesson: str, topic: str
 ) -> None:
     """Rename and organize a large note without reading or rewriting its text."""
     clean_title = title.strip()
@@ -386,10 +389,10 @@ def update_study_note_metadata(
         connection.execute(
             """
             UPDATE study_notes
-            SET title = ?, unit = ?, chapter = ?, lesson = ?
+            SET title = ?, unit = ?, chapter = ?, lesson = ?, topic = ?
             WHERE id = ?
             """,
-            (clean_title, unit.strip(), chapter.strip(), lesson.strip(), note_id),
+            (clean_title, unit.strip(), chapter.strip(), lesson.strip(), topic.strip(), note_id),
         )
 
 
@@ -403,7 +406,7 @@ def update_study_note_organization(note_id: int, unit: str, chapter: str, lesson
 
 
 def update_study_note(
-    note_id: int, title: str, content: str, unit: str, chapter: str, lesson: str, source_group: str
+    note_id: int, title: str, content: str, unit: str, chapter: str, lesson: str, source_group: str, topic: str = ""
 ) -> None:
     """Edit a saved note and its organization details."""
     clean_title = title.strip()
@@ -414,10 +417,10 @@ def update_study_note(
         connection.execute(
             """
             UPDATE study_notes
-            SET title = ?, content = ?, unit = ?, chapter = ?, lesson = ?, source_group = ?
+            SET title = ?, content = ?, unit = ?, chapter = ?, lesson = ?, source_group = ?, topic = ?
             WHERE id = ?
             """,
-            (clean_title, clean_content, unit.strip(), chapter.strip(), lesson.strip(), source_group, note_id),
+            (clean_title, clean_content, unit.strip(), chapter.strip(), lesson.strip(), source_group, topic.strip(), note_id),
         )
 
 

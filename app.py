@@ -724,7 +724,7 @@ if study_notes:
     for note in visible_notes:
         if note["id"] != selected_note_id:
             continue
-        note_is_large = int(note.get("content_length", 0)) > MAX_NOTE_EDITOR_CHARACTERS
+        note_is_large = int(note["content_length"]) > MAX_NOTE_EDITOR_CHARACTERS
         if note_is_large:
             # This screen reruns whenever a quiz control changes. Avoid loading
             # an entire imported textbook just because it is selected for viewing.

@@ -77,6 +77,30 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(summary["content_length"], 200_000)
         self.assertEqual(full_note["content"], "A" * 200_000)
 
+    def test_ai_question_batch_is_saved_atomically(self) -> None:
+        database.create_course("Math", "Mathematics", None)
+        course = database.list_courses()[0]
+        database.create_quiz_questions(
+            course["id"],
+            [
+                {
+                    "topic": "Functions",
+                    "question": "What is the domain?",
+                    "options": ["Inputs", "Outputs", "Slope", "Intercept"],
+                    "correct_answer": "Inputs",
+                    "explanation": "The domain is the set of inputs.",
+                },
+                {
+                    "topic": "Functions",
+                    "question": "What is the range?",
+                    "options": ["Outputs", "Inputs", "Slope", "Intercept"],
+                    "correct_answer": "Outputs",
+                    "explanation": "The range is the set of outputs.",
+                },
+            ],
+        )
+        self.assertEqual(len(database.list_quiz_questions(course["id"])), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

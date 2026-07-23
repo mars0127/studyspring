@@ -14,6 +14,11 @@ from pathlib import Path
 
 MAX_CHARS_PER_TEXTBOOK_SECTION = 55_000
 MIN_USABLE_EMBEDDED_TEXT = 80
+MIN_TOPIC_SECTION_CHARACTERS = 350
+# This is deliberately below the prompt size used by the AI quiz flow. A
+# long textbook section can still be kept under one topic, but its saved note
+# parts remain small enough to be used safely on a free hosted instance.
+MAX_TOPIC_SECTION_CHARACTERS = 18_000
 
 
 @dataclass(frozen=True)
@@ -31,8 +36,35 @@ class TextbookSection:
     text: str
 
 
+@dataclass(frozen=True)
+class TopicSection:
+    """A lightweight, reviewable range inside one saved study note."""
+
+    topic: str
+    start: int
+    end: int
+
+
 _HEADING = re.compile(
     r"(?im)^\s*((?:unit|chapter|module|lesson)\s+(?:\d+|[ivxlcdm]+|[a-z])(?:\s*[-:.]\s*|\s+)[^\n]{2,100})\s*$"
+)
+
+# The first two patterns are very reliable in copied PDFs and class handouts.
+# The final title-case pattern makes ordinary headings such as "Muscle
+# Structure" useful, while rejecting sentence-like lines that end in normal
+# punctuation.  This deliberately does not try to infer topics from arbitrary
+# prose; that would be an AI job and could split a student's ideas incorrectly.
+_TOPIC_HEADING = re.compile(
+    r"""(?mx)
+    ^\s*(?P<title>
+        (?:(?i:unit|chapter|module|lesson|section|topic)\s+
+           (?:\d+(?:\.\d+)*|[ivxlcdm]+|[a-z])(?:\s*[-:.]\s*|\s+)[^\n]{2,90})
+        |
+        (?:\d+(?:\.\d+){1,3}\s+[A-Za-z][^\n]{2,90})
+        |
+        (?:[A-Z][A-Za-z0-9&/()'’\-]+(?:\s+[A-Z][A-Za-z0-9&/()'’\-]+){1,7})
+    )\s*$
+    """
 )
 
 
@@ -173,3 +205,68 @@ def split_textbook_sections(pages: list[tuple[int, str]]) -> list[TextbookSectio
         current.append(f"[Page {page_number}]\n{page_text}")
     finish()
     return sections
+
+
+def _paragraph_ranges(text: str, start: int, end: int, maximum_size: int) -> list[tuple[int, int]]:
+    """Split an oversized topic at paragraph boundaries without losing text."""
+    ranges: list[tuple[int, int]] = []
+    current = start
+    while end - current > maximum_size:
+        boundary = text.rfind("\n\n", current, current + maximum_size)
+        if boundary <= current:
+            boundary = text.rfind("\n", current, current + maximum_size)
+        if boundary <= current:
+            boundary = text.rfind(" ", current, current + maximum_size)
+        if boundary <= current:
+            boundary = current + maximum_size
+        ranges.append((current, boundary))
+        current = boundary
+        while current < end and text[current].isspace():
+            current += 1
+    if current < end:
+        ranges.append((current, end))
+    return ranges
+
+
+def split_study_note_topics(text: str) -> list[TopicSection]:
+    """Propose topic sections from explicit headings in one note.
+
+    The function uses no network or AI calls. It returns an empty list unless
+    at least two sensible sections are found, so a chapter with only a title is
+    never misleadingly split into artificial "topics".
+    """
+    clean_text = text.strip()
+    if not clean_text:
+        return []
+    offset = text.find(clean_text)
+    matches = [
+        (" ".join(match.group("title").split()), match.start() + offset)
+        for match in _TOPIC_HEADING.finditer(clean_text)
+    ]
+    if not matches:
+        return []
+
+    raw_sections: list[TopicSection] = []
+    if matches[0][1] > offset + MIN_TOPIC_SECTION_CHARACTERS:
+        raw_sections.append(TopicSection("Overview", offset, matches[0][1]))
+    for index, (topic, start) in enumerate(matches):
+        end = matches[index + 1][1] if index + 1 < len(matches) else offset + len(clean_text)
+        raw_sections.append(TopicSection(topic, start, end))
+
+    # A heading that only contains a caption or a cross-reference is not a
+    # useful quiz boundary. Merge it into the preceding substantial section.
+    sections: list[TopicSection] = []
+    for candidate in raw_sections:
+        if sections and candidate.end - candidate.start < MIN_TOPIC_SECTION_CHARACTERS:
+            previous = sections[-1]
+            sections[-1] = TopicSection(previous.topic, previous.start, candidate.end)
+        else:
+            sections.append(candidate)
+    if len(sections) < 2:
+        return []
+
+    bounded: list[TopicSection] = []
+    for section in sections:
+        for start, end in _paragraph_ranges(text, section.start, section.end, MAX_TOPIC_SECTION_CHARACTERS):
+            bounded.append(TopicSection(section.topic, start, end))
+    return bounded

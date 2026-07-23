@@ -1,10 +1,13 @@
 """Tests for safely accepting Gemini quiz output."""
 
+import json
 import unittest
+from unittest.mock import patch
 
 from gemini_client import (
     MAX_SOURCE_CHARACTERS_PER_REQUEST,
     _semantic_sections,
+    generate_question_batch,
     parse_questions,
     plan_question_batches,
     split_question_source,
@@ -12,6 +15,39 @@ from gemini_client import (
 
 
 class GeminiClientTests(unittest.TestCase):
+    def test_question_batch_uses_small_rest_request(self) -> None:
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [
+                                        {
+                                            "text": '{"questions":[{"topic":"Cells","question":"What is mitosis for?","options":["Growth","Digestion","Breathing","Movement"],"correct_answer":"Growth","explanation":"Growth and repair."}]}'
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+        with patch("gemini_client.urlopen", return_value=FakeResponse()) as mocked_urlopen:
+            questions = generate_question_batch("test-key", "Mitosis supports growth.", 1)
+
+        self.assertEqual(questions[0]["correct_answer"], "Growth")
+        request = mocked_urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["generationConfig"]["response_mime_type"], "application/json")
+        self.assertNotIn("test-key", request.full_url)
     def test_parse_questions_keeps_valid_question(self) -> None:
         raw = '''{"questions":[{"topic":"Mitosis","question":"Why does mitosis occur?","options":["Growth","Digestion","Breathing","Photosynthesis"],"correct_answer":"Growth","explanation":"It supports growth."}]}'''
 

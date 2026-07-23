@@ -47,7 +47,6 @@ from database import (
 )
 from gemini_client import (
     DEFAULT_MODEL,
-    create_gemini_client,
     extract_text_from_image,
     generate_question_batch,
     grade_short_answer,
@@ -69,7 +68,7 @@ MAX_SELECTED_SCANNED_PDF_PAGES = 120
 # envelope of Render's free instance.  It is split into coherent batches later.
 MAX_AI_SOURCE_CHARACTERS = 36_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
-APP_VERSION = "2026.07.23.2"
+APP_VERSION = "2026.07.23.3"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -162,7 +161,6 @@ def read_pdf_pages_for_import(
     total_pages = last_page - first_page + 1
     extracted: list[tuple[int, str]] = []
     skipped_pages: list[int] = []
-    client = None
     last_ocr_request_at = 0.0
     page_iterator = (
         iter_pdf_pages_from_path(pdf_source, first_page, last_page)
@@ -181,7 +179,6 @@ def read_pdf_pages_for_import(
             skipped_pages.append(page.number)
             extracted.append((page.number, f"[Page {page.number} was skipped because AI OCR is not set up.]"))
             continue
-        client = client or create_gemini_client(api_key)
         wait_seconds = OCR_REQUEST_INTERVAL_SECONDS - (time.monotonic() - last_ocr_request_at)
         if wait_seconds > 0:
             progress.progress(
@@ -192,7 +189,7 @@ def read_pdf_pages_for_import(
         for quota_attempt in range(MAX_OCR_QUOTA_RETRIES + 1):
             try:
                 last_ocr_request_at = time.monotonic()
-                text = extract_text_from_image(api_key, page.image_bytes, "image/png", client=client)
+                text = extract_text_from_image(api_key, page.image_bytes, "image/png")
                 break
             except Exception as error:
                 if is_ocr_quota_error(error) and quota_attempt < MAX_OCR_QUOTA_RETRIES:

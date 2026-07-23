@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import re
 import time
+from base64 import b64encode
 from collections.abc import Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 # Stable multimodal model designed for high-volume extraction work.
@@ -23,27 +26,51 @@ QUESTION_QUOTA_RETRY_SECONDS = 65
 MAX_QUESTION_QUOTA_RETRIES = 2
 
 
-def _gemini_modules():
-    """Import Gemini only when an AI feature is used."""
+def _request_gemini(
+    api_key: str, parts: list[dict[str, object]], generation_config: dict[str, object]
+) -> str:
+    """Call Gemini's REST API without loading the heavyweight Python SDK.
+
+    Render's 512 MB free service repeatedly ran out of memory during AI work.
+    Python's standard library is enough for the small single-turn requests this
+    app uses, and avoids importing the SDK's large dependency graph.
+    """
+    payload = json.dumps(
+        {"contents": [{"parts": parts}], "generationConfig": generation_config}
+    ).encode("utf-8")
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{DEFAULT_MODEL}:generateContent"
+    )
+    request = Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        method="POST",
+    )
     try:
-        from google import genai
-        from google.genai import types
-    except ImportError as error:
-        raise RuntimeError("Gemini is not installed. Run: pip install -r requirements.txt") from error
-    return genai, types
+        with urlopen(request, timeout=30) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        error_body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini request failed ({error.code}): {error_body}") from error
+    except URLError as error:
+        raise RuntimeError(f"Gemini connection failed: {error.reason}") from error
+    try:
+        response_parts = parsed["candidates"][0]["content"]["parts"]
+        text = "".join(str(part.get("text", "")) for part in response_parts)
+    except (IndexError, KeyError, TypeError) as error:
+        raise ValueError("Gemini returned no usable text.") from error
+    return text.strip()
 
 
-def create_gemini_client(api_key: str):
-    """Create one Gemini connection that can be reused for a larger task."""
-    genai, _ = _gemini_modules()
-    return genai.Client(api_key=api_key)
-
-
-def _generate_with_retries(client, **request_arguments):
-    """Retry temporary provider-overload errors before failing the student's request."""
+def _generate_with_retries(
+    api_key: str, parts: list[dict[str, object]], generation_config: dict[str, object]
+) -> str:
+    """Retry temporary provider overloads before failing the student's request."""
     for attempt in range(3):
         try:
-            return client.models.generate_content(**request_arguments)
+            return _request_gemini(api_key, parts, generation_config)
         except Exception as error:
             error_text = str(error)
             temporary_error = (
@@ -185,7 +212,6 @@ def split_question_source(notes: str, request_count: int) -> list[str]:
 
 def generate_question_batch(api_key: str, notes: str, question_count: int) -> list[dict[str, object]]:
     """Generate one small JSON question batch with a bounded response size."""
-    genai, types = _gemini_modules()
     prompt = f'''Study material:
 {notes}
 
@@ -194,21 +220,11 @@ The source may combine the student's notes with textbook excerpts, slides, and t
 Return JSON only, with this exact shape:
 {{"questions":[{{"topic":"...","question":"...","options":["...","...","...","..."],"correct_answer":"one exact option","explanation":"short explanation"}}]}}
 '''
-    # Close the HTTP client after every short batch.  Leaving these clients
-    # open can accumulate sockets and memory in a long-lived Streamlit process.
-    with genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=30_000),
-    ) as client:
-        response = _generate_with_retries(
-            client,
-            model=DEFAULT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json", temperature=0.3, max_output_tokens=2048
-            ),
-        )
-        response_text = response.text
+    response_text = _generate_with_retries(
+        api_key,
+        [{"text": prompt}],
+        {"response_mime_type": "application/json", "temperature": 0.3, "max_output_tokens": 2048},
+    )
     if not response_text:
         raise ValueError("Gemini returned an empty response. Please try again.")
     return parse_questions(response_text)
@@ -270,7 +286,6 @@ def grade_short_answer(
     possible_marks: int,
 ) -> dict[str, object]:
     """Mark one student response against the saved marking guide, not outside facts."""
-    genai, types = _gemini_modules()
     prompt = f'''You are marking a student practice response, not a real school assessment.
 Use only the question, student response, and marking guide below. Do not reward facts that are not supported by the marking guide.
 Return JSON only in exactly this shape:
@@ -282,15 +297,14 @@ Possible marks: {possible_marks}
 Student response: {student_answer}
 Marking guide: {marking_guide}
 '''
-    client = genai.Client(api_key=api_key)
-    response = _generate_with_retries(
-        client,
-        model=DEFAULT_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1),
-    )
     try:
-        result = json.loads(response.text or "")
+        result = json.loads(
+            _generate_with_retries(
+                api_key,
+                [{"text": prompt}],
+                {"response_mime_type": "application/json", "temperature": 0.1, "max_output_tokens": 1024},
+            )
+        )
         score = int(result["score"])
     except (TypeError, ValueError, KeyError, json.JSONDecodeError) as error:
         raise ValueError("Gemini returned an unusable marking result. Please try again.") from error
@@ -302,48 +316,33 @@ Marking guide: {marking_guide}
     }
 
 
-def extract_text_from_image(api_key: str, image_bytes: bytes, mime_type: str, client=None) -> str:
+def extract_text_from_image(api_key: str, image_bytes: bytes, mime_type: str) -> str:
     """Use Gemini's image understanding to turn a handwritten or scanned note into text."""
-    genai, types = _gemini_modules()
-    client = client or genai.Client(api_key=api_key)
-    response = _generate_with_retries(
-        client,
-        model=DEFAULT_MODEL,
-        contents=[
-            "Transcribe this study-note image accurately. Return only the readable note text. "
-            "Keep headings, formulas, lists, and important labels. Do not add facts or explanations.",
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+    text = _generate_with_retries(
+        api_key,
+        [
+            {"text": "Transcribe this study-note image accurately. Return only the readable note text. Keep headings, formulas, lists, and important labels. Do not add facts or explanations."},
+            {"inline_data": {"mime_type": mime_type, "data": b64encode(image_bytes).decode("ascii")}},
         ],
-        config=types.GenerateContentConfig(temperature=0),
+        {"temperature": 0, "max_output_tokens": 4096},
     )
-    text = (response.text or "").strip()
     if not text:
         raise ValueError("Gemini could not find readable text in that image.")
     return text
 
 
-def extract_text_from_images(api_key: str, image_pages: list[bytes], client=None) -> str:
+def extract_text_from_images(api_key: str, image_pages: list[bytes]) -> str:
     """Transcribe a small batch of scanned PDF pages with one Gemini request."""
     if not image_pages:
         raise ValueError("No PDF pages were provided for transcription.")
-    genai, types = _gemini_modules()
-    client = client or genai.Client(api_key=api_key)
-    contents = [
-        "Transcribe these study-textbook pages accurately, in order. Return only the readable "
-        "note text. Keep page headings, formulas, lists, and important labels. Do not add facts "
-        "or explanations. Separate each page with a clear 'Page N' heading."
+    parts: list[dict[str, object]] = [
+        {"text": "Transcribe these study-textbook pages accurately, in order. Return only the readable note text. Keep page headings, formulas, lists, and important labels. Do not add facts or explanations. Separate each page with a clear 'Page N' heading."}
     ]
-    contents.extend(
-        types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+    parts.extend(
+        {"inline_data": {"mime_type": "image/png", "data": b64encode(image_bytes).decode("ascii")}}
         for image_bytes in image_pages
     )
-    response = _generate_with_retries(
-        client,
-        model=DEFAULT_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(temperature=0),
-    )
-    text = (response.text or "").strip()
+    text = _generate_with_retries(api_key, parts, {"temperature": 0, "max_output_tokens": 4096})
     if not text:
         raise ValueError("Gemini could not find readable text in those PDF pages.")
     return text

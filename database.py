@@ -329,6 +329,70 @@ def get_study_note(note_id: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def get_study_note_preview(note_id: int, maximum_characters: int = 10_000) -> str:
+    """Return only a short prefix without materializing a large note in Python."""
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT substr(content, 1, ?) AS preview FROM study_notes WHERE id = ?",
+            (maximum_characters, note_id),
+        ).fetchone()
+    return str(row["preview"] or "") if row else ""
+
+
+def get_study_note_excerpt(
+    note_id: int, maximum_characters: int, piece_count: int = 3
+) -> str:
+    """Sample a long note in SQLite instead of loading all of it into app memory."""
+    if maximum_characters < 1:
+        return ""
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT length(content) AS content_length FROM study_notes WHERE id = ?", (note_id,)
+        ).fetchone()
+        if not row:
+            return ""
+        content_length = int(row["content_length"] or 0)
+        if content_length <= maximum_characters:
+            full_row = connection.execute(
+                "SELECT content FROM study_notes WHERE id = ?", (note_id,)
+            ).fetchone()
+            return str(full_row["content"] or "") if full_row else ""
+
+        pieces = max(2, min(piece_count, maximum_characters // 1_000))
+        piece_size = max(1_000, maximum_characters // pieces)
+        positions = [
+            1 + int(index * max(0, content_length - piece_size) / max(1, pieces - 1))
+            for index in range(pieces)
+        ]
+        excerpts = []
+        for position in dict.fromkeys(positions):
+            excerpt_row = connection.execute(
+                "SELECT substr(content, ?, ?) AS excerpt FROM study_notes WHERE id = ?",
+                (position, piece_size, note_id),
+            ).fetchone()
+            if excerpt_row and excerpt_row["excerpt"]:
+                excerpts.append(str(excerpt_row["excerpt"]))
+    return "\n\n[Excerpt]\n\n".join(excerpts)[:maximum_characters]
+
+
+def update_study_note_metadata(
+    note_id: int, title: str, unit: str, chapter: str, lesson: str
+) -> None:
+    """Rename and organize a large note without reading or rewriting its text."""
+    clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("A note title is required.")
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE study_notes
+            SET title = ?, unit = ?, chapter = ?, lesson = ?
+            WHERE id = ?
+            """,
+            (clean_title, unit.strip(), chapter.strip(), lesson.strip(), note_id),
+        )
+
+
 def update_study_note_organization(note_id: int, unit: str, chapter: str, lesson: str) -> None:
     """Move a note into a unit, chapter, and lesson without changing its content."""
     with get_connection() as connection:

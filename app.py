@@ -28,6 +28,8 @@ from database import (
     delete_course,
     delete_study_note,
     get_study_note,
+    get_study_note_excerpt,
+    get_study_note_preview,
     initialize_database,
     list_courses,
     list_flashcards,
@@ -40,6 +42,7 @@ from database import (
     replace_study_note_content,
     update_study_note_organization,
     update_study_note,
+    update_study_note_metadata,
     update_course,
 )
 from gemini_client import (
@@ -66,7 +69,7 @@ MAX_SELECTED_SCANNED_PDF_PAGES = 120
 # envelope of Render's free instance.  It is split into coherent batches later.
 MAX_AI_SOURCE_CHARACTERS = 36_000
 MAX_NOTE_EDITOR_CHARACTERS = 120_000
-APP_VERSION = "2026.07.23.1"
+APP_VERSION = "2026.07.23.2"
 # Render's free instances have limited memory. A larger file can be held more
 # than once while Streamlit and PyMuPDF inspect it, which can restart the app.
 MAX_TEXTBOOK_UPLOAD_MB = int(os.getenv("TEXTBOOK_UPLOAD_MAX_MB", "40"))
@@ -226,20 +229,12 @@ def prepare_ai_source(selected_notes: list[dict[str, object]], labeler) -> tuple
     for note in selected_notes:
         content = str(note.get("content", ""))
         if not content:
-            loaded_note = get_study_note(int(note["id"]))
-            content = str(loaded_note["content"]) if loaded_note else ""
-        if len(content) > allowance:
-            # Cover the beginning, middle, and end of one long PDF note rather
-            # than only sending its first pages to Gemini.
-            piece_count = min(6, max(2, len(content) // 12_000))
-            piece_size = max(1_000, allowance // piece_count)
-            positions = [
-                int(index * (len(content) - piece_size) / max(1, piece_count - 1))
-                for index in range(piece_count)
-            ]
-            content = "\n\n[Excerpt]\n".join(
-                content[position:position + piece_size] for position in positions
-            ) + "\n[Additional material is stored in StudySpring.]"
+            # SQLite extracts only the small parts we will actually send to
+            # Gemini.  Do not load a whole scanned textbook for every widget
+            # rerun just to build a bounded quiz prompt.
+            content = get_study_note_excerpt(int(note["id"]), allowance, piece_count=6)
+        if int(note.get("content_length", len(content))) > allowance:
+            content += "\n[Additional material is stored in StudySpring.]"
         sampled.append(f"--- {labeler(note)} ---\n{content}")
     return "\n\n".join(sampled)[:MAX_AI_SOURCE_CHARACTERS], total_source_length > MAX_AI_SOURCE_CHARACTERS
 
@@ -729,27 +724,35 @@ if study_notes:
     for note in visible_notes:
         if note["id"] != selected_note_id:
             continue
-        note = get_study_note(int(note["id"]))
-        if note is None:
-            continue
+        note_is_large = int(note.get("content_length", 0)) > MAX_NOTE_EDITOR_CHARACTERS
+        if note_is_large:
+            # This screen reruns whenever a quiz control changes. Avoid loading
+            # an entire imported textbook just because it is selected for viewing.
+            opened_note = dict(note)
+            opened_note["content"] = get_study_note_preview(int(note["id"]))
+        else:
+            opened_note = get_study_note(int(note["id"]))
+            if opened_note is None:
+                continue
+        note = opened_note
         location = " · ".join(item for item in [note["unit"], note["chapter"], note["lesson"]] if item)
         note_heading = f"{location} — {note['title']}" if location else note["title"]
         with st.expander(note_heading):
-            if len(note["content"]) > MAX_NOTE_EDITOR_CHARACTERS:
+            if note_is_large:
                 st.caption(
                     "This large imported note is shown as a preview to keep the hosted app stable. "
                     "Its complete text remains saved for AI generation."
                 )
-                st.text(note["content"][:10_000] + "\n\n[Preview ends here]")
+                st.text(note["content"] + "\n\n[Preview ends here]")
             else:
                 st.write(note["content"])
             st.caption("Edit the title, content, or organization below.")
             with st.form(f"edit_note_{note['id']}"):
                 updated_title = st.text_input("Note title", value=note["title"], key=f"note_title_{note['id']}")
-                if len(note["content"]) <= MAX_NOTE_EDITOR_CHARACTERS:
+                if not note_is_large:
                     updated_content = st.text_area("Note content", value=note["content"], height=180, key=f"note_content_{note['id']}")
                 else:
-                    updated_content = note["content"]
+                    updated_content = ""
                     st.info("Full-text editing is unavailable for this large imported note. You can still rename and organize it.")
                 organization_left, organization_middle, organization_right = st.columns(3)
                 updated_unit = organization_left.text_input("Unit", value=note["unit"], key=f"note_unit_{note['id']}")
@@ -758,11 +761,16 @@ if study_notes:
                 save_note = st.form_submit_button("Save note changes")
             if save_note:
                 try:
-                    update_study_note(
-                        note["id"], updated_title, updated_content,
-                        updated_unit, updated_chapter, updated_lesson,
-                        "lesson",
-                    )
+                    if note_is_large:
+                        update_study_note_metadata(
+                            note["id"], updated_title, updated_unit, updated_chapter, updated_lesson
+                        )
+                    else:
+                        update_study_note(
+                            note["id"], updated_title, updated_content,
+                            updated_unit, updated_chapter, updated_lesson,
+                            "lesson",
+                        )
                 except ValueError as error:
                     st.error(str(error))
                 else:

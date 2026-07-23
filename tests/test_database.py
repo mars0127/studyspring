@@ -76,6 +76,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertNotIn("content", summary.keys())
         self.assertEqual(summary["content_length"], 200_000)
         self.assertEqual(full_note["content"], "A" * 200_000)
+        self.assertEqual(int(summary["content_length"]), 200_000)
 
     def test_large_note_preview_and_excerpt_stay_bounded(self) -> None:
         database.create_course("Memory test", "Science", None)
